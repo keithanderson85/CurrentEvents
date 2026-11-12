@@ -1,0 +1,17 @@
+services:
+  app:
+    image: ghcr.io/keithanderson85/currentevents:latest
+    build: .
+    container_name: currentevents
+    ports:
+      - "3000:3000"
+    env_file: .env          # holds OPENROUTER_API_KEY; never committed
+    environment:
+      PORT: 3000
+      DATA_DIR: /app/data
+    volumes:
+      - app-data:/app/data  # keeps your events, notes and chats across restarts/updates
+    restart: unless-stopped
+
+volumes:
+  app-data:

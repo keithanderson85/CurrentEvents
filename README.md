@@ -32,6 +32,28 @@ npm start                 # http://localhost:3000
 
 Your API key only lives in `.env`, which is git-ignored. Never commit it.
 
+### Run with Docker
+
+The easiest way: no Node install needed, and your data survives updates.
+
+```bash
+cp .env.example .env      # put your OpenRouter key in .env
+docker compose up -d      # builds the image and starts it on http://localhost:3000
+```
+
+Update later with `git pull && docker compose up -d --build`. Stop with `docker compose down` (your events stay in the `app-data` volume).
+
+Or use the prebuilt image that GitHub builds on every push to `main` (amd64 and arm64, so it runs on Apple Silicon too):
+
+```bash
+docker login ghcr.io -u keithanderson85     # password: a GitHub token with read:packages (needed while the repo is private)
+docker run -d --name currentevents -p 3000:3000 --env-file .env \
+  -v currentevents-data:/app/data --restart unless-stopped \
+  ghcr.io/keithanderson85/currentevents:latest
+```
+
+To also publish to Docker Hub, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` as repository secrets on GitHub; the workflow in `.github/workflows/docker.yml` will push there too.
+
 ### Configuration (`.env`)
 
 | Variable | Default | What it does |
