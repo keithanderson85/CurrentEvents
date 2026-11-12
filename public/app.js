@@ -811,7 +811,7 @@ function paintChat() {
   const llm = state.status?.llm;
   $('#chat').innerHTML = `
     <div class="chat-head">
-      <div><h3>Ask about this event</h3><div class="sub">Uses the articles, your notes and deep dives</div></div>
+      <div><h3>Ask about this event</h3><div class="sub">Uses the articles, your notes and deep dives, and searches the web when needed</div></div>
       <div class="chat-head-tools">
         ${ev.chat.length ? `<button class="btn sm ghost" id="clearChat" title="Clear conversation">${icons.trash}</button>` : ''}
         <button class="btn icon ghost mobile-only" id="chatClose" aria-label="Close chat">${icons.x}</button>
@@ -914,12 +914,19 @@ function setupChatSheet() {
   askObserver.observe($('#askBar'));
 }
 
+function webSourcesHTML(sources) {
+  if (!sources?.length) return '';
+  return `<details class="web-sources"><summary>${icons.search || ''}Searched the web · ${sources.length} result${sources.length === 1 ? '' : 's'}</summary>${sources
+    .map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><span class="num">W${s.n}</span><span><b>${esc(s.name || '')}</b> — ${esc(s.title)}</span></a>`)
+    .join('')}</details>`;
+}
+
 function chatLogHTML() {
   const ev = state.event;
   if (!ev.chat.length)
     return `<div class="chat-empty"><span>Try asking:</span><div class="suggestions">${SUGGESTIONS.map((s) => `<button type="button" data-suggest>${esc(s)}</button>`).join('')}</div></div>`;
   return ev.chat
-    .map((m) => (m.role === 'user' ? `<div class="msg user">${esc(m.content)}</div>` : `<div class="msg assistant"><div class="prose">${md(m.content)}</div></div>`))
+    .map((m) => (m.role === 'user' ? `<div class="msg user">${esc(m.content)}</div>` : `<div class="msg assistant"><div class="prose">${md(m.content)}</div>${webSourcesHTML(m.sources)}</div>`))
     .join('');
 }
 
@@ -933,6 +940,7 @@ async function sendChat(message) {
   log.scrollTop = log.scrollHeight;
   const out = $('#streaming');
   let text = '';
+  let sources = null;
   try {
     const res = await fetch(`/api/events/${ev.id}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Chat failed');
@@ -949,6 +957,8 @@ async function sendChat(message) {
         if (!p.startsWith('data:')) continue;
         const msg = JSON.parse(p.slice(5));
         if (msg.error) throw new Error(msg.error);
+        if (msg.status && !text) out.innerHTML = `<div class="chat-status"><div class="typing"><i></i><i></i><i></i></div><span>${esc(msg.status)}</span></div>`;
+        if (msg.sources) sources = msg.sources;
         if (msg.t) {
           text += msg.t;
           out.innerHTML = `<div class="prose">${md(text)}</div>`;
@@ -957,7 +967,8 @@ async function sendChat(message) {
         }
       }
     }
-    ev.chat.push({ role: 'assistant', content: text });
+    ev.chat.push({ role: 'assistant', content: text, ...(sources ? { sources } : {}) });
+    if (sources) out.insertAdjacentHTML('beforeend', webSourcesHTML(sources));
   } catch (err) {
     out.innerHTML = `<div class="prose" style="color:#dc2626">${esc(err.message)}</div>`;
     if (text) ev.chat.push({ role: 'assistant', content: text });

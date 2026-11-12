@@ -284,7 +284,7 @@ app.post('/api/events/:id/chat', async (req, res) => {
   res.on('close', () => ctrl.abort());
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   try {
-    await streamChat(ev.id, message, { onToken: (t) => send({ t }), signal: ctrl.signal });
+    await streamChat(ev.id, message, { onToken: (t) => send({ t }), onStatus: (status) => send({ status }), onSources: (sources) => send({ sources }), signal: ctrl.signal, web: req.body?.web !== false });
     send({ done: true });
   } catch (e) {
     if (!ctrl.signal.aborted) send({ error: e.message });

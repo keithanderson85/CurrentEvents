@@ -7,16 +7,31 @@ import { hasLLM } from './config.js';
 // Primary sources and evidence, so a deep dive can check what's being said against
 // research, government records and official data, not just other news coverage.
 // All free and key-less:
-//   - OpenAlex: 250M+ scholarly works (journals, preprints, reports) with abstracts and citation counts.
+//   - OpenAlex: 250M+ scholarly works with abstracts and citation counts (Crossref as a fallback).
+//   - Europe PMC: life-science and health papers and preprints.
 //   - Federal Register: US rules, proposed rules, executive orders and agency notices.
-//   - Bing web search limited to government, academic and international-body sites.
-//   - Bing web search limited to established fact-checkers.
+//   - GOV.UK: UK government publications, statistics and guidance.
+//   - Google News search limited to government and international-body sites (press releases,
+//     statistics releases, speeches), and to established fact-checkers.
 
 const OPENALEX = process.env.OPENALEX_URL || 'https://api.openalex.org/works';
+const OPENALEX_KEY = process.env.OPENALEX_API_KEY || '';
+const CROSSREF = process.env.CROSSREF_URL || 'https://api.crossref.org/works';
+const EUROPEPMC = process.env.EUROPEPMC_URL || 'https://www.ebi.ac.uk/europepmc/webservices/rest/search';
 const FEDREG = process.env.FEDREG_URL || 'https://www.federalregister.gov/api/v1/documents.json';
-const BING_WEB = process.env.BING_WEB_URL || 'https://www.bing.com/search';
+const GOVUK = process.env.GOVUK_URL || 'https://www.gov.uk/api/search.json';
+const GNEWS = process.env.GOOGLE_NEWS_URL || 'https://news.google.com/rss/search';
 
 const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@', isArray: (n) => n === 'item' });
+const clean = (t) =>
+  String(t || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&[a-z]+;|&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const OFFICIAL_DOMAINS = [
   'who.int', 'un.org', 'unhcr.org', 'unicef.org', 'imf.org', 'worldbank.org', 'oecd.org', 'europa.eu', 'iaea.org',
@@ -49,6 +64,7 @@ export async function searchOpenAlex(query, { max = 8 } = {}) {
     filter: 'from_publication_date:2010-01-01,has_abstract:true',
     select: 'id,doi,title,publication_year,primary_location,cited_by_count,abstract_inverted_index,open_access,type',
   });
+  if (OPENALEX_KEY) params.set('api_key', OPENALEX_KEY);
   const { text } = await fetchText(`${OPENALEX}?${params}`, { timeout: 15000, accept: 'application/json' });
   const data = JSON.parse(text);
   return (data.results || []).map((w) => {
@@ -96,30 +112,101 @@ export async function searchFederalRegister(query, { max = 5 } = {}) {
   });
 }
 
-export async function searchWeb(query, { max = 10 } = {}) {
-  const { text } = await fetchText(`${BING_WEB}?format=rss&setlang=en-US&q=${encodeURIComponent(query)}`, {
-    timeout: 12000,
-    accept: 'application/rss+xml, application/xml, text/xml',
+// Crossref: used when OpenAlex is unavailable (it has a daily allowance per address).
+export async function searchCrossref(query, { max = 8 } = {}) {
+  const params = new URLSearchParams({
+    query,
+    rows: String(max),
+    filter: 'has-abstract:true,from-pub-date:2010-01-01',
+    select: 'DOI,title,container-title,issued,is-referenced-by-count,abstract,URL',
   });
-  const items = xml.parse(text)?.rss?.channel?.item || [];
-  return items.slice(0, max).map((it) => {
-    const url = String(it.link || '');
+  const { text } = await fetchText(`${CROSSREF}?${params}`, { timeout: 15000, accept: 'application/json' });
+  return (JSON.parse(text).message?.items || []).map((w) => {
+    const venue = clean(w['container-title']?.[0]);
+    const year = w.issued?.['date-parts']?.[0]?.[0];
+    const url = w.URL || `https://doi.org/${w.DOI}`;
     return {
-      title: String(it.title || '').trim(),
+      title: clean(w.title?.[0]),
       url,
       domain: domainOf(url),
-      name: domainOf(url),
-      kind: sourceKind(url),
-      text: truncate(String(it.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), 400),
-      via: 'web',
+      name: venue || 'Research paper',
+      kind: 'study',
+      text: truncate(clean(w.abstract), 2200),
+      meta: [venue, year, w['is-referenced-by-count'] ? `${w['is-referenced-by-count']} citations` : ''].filter(Boolean).join(' · '),
+      via: 'crossref',
+    };
+  });
+}
+
+export const searchPapers = (query, opts) => searchOpenAlex(query, opts).catch(() => searchCrossref(query, opts));
+
+export async function searchEuropePmc(query, { max = 5 } = {}) {
+  const params = new URLSearchParams({ query: `${query} AND HAS_ABSTRACT:y`, format: 'json', pageSize: String(max), resultType: 'core' });
+  const { text } = await fetchText(`${EUROPEPMC}?${params}`, { timeout: 15000, accept: 'application/json' });
+  return (JSON.parse(text).resultList?.result || []).map((w) => {
+    const venue = w.journalInfo?.journal?.title || (w.source === 'PPR' ? 'Preprint' : '');
+    const url = w.doi ? `https://doi.org/${w.doi}` : `https://europepmc.org/article/${w.source}/${w.id}`;
+    return {
+      title: clean(w.title),
+      url,
+      domain: domainOf(url),
+      name: venue || 'Research paper',
+      kind: 'study',
+      text: truncate(clean(w.abstractText), 2200),
+      meta: [venue, w.pubYear, w.citedByCount ? `${w.citedByCount} citations` : ''].filter(Boolean).join(' · '),
+      via: 'europepmc',
+    };
+  });
+}
+
+export async function searchGovUk(query, { max = 4 } = {}) {
+  const params = new URLSearchParams({ q: query, count: String(max), fields: 'title,link,description,public_timestamp,organisations' });
+  const { text } = await fetchText(`${GOVUK}?${params}`, { timeout: 15000, accept: 'application/json' });
+  return (JSON.parse(text).results || []).map((d) => {
+    const org = (d.organisations || []).map((o) => o.title).filter(Boolean).slice(0, 2).join(', ');
+    return {
+      title: d.title,
+      url: `https://www.gov.uk${d.link}`,
+      domain: 'gov.uk',
+      name: org ? `GOV.UK (${org})` : 'GOV.UK',
+      kind: 'gov',
+      text: truncate(d.description || '', 600),
+      meta: (d.public_timestamp || '').slice(0, 10),
+      via: 'govuk',
+    };
+  });
+}
+
+// Google News limited to particular sites. It indexes government press releases, statistics
+// releases and speeches as well as fact-checkers. Links go through Google, so these come
+// with the headline only; the reader can open them, and the title usually carries the finding.
+export async function searchSites(query, sites, { max = 8 } = {}) {
+  const q = `${query} (${sites.map((s) => 'site:' + s).join(' OR ')})`;
+  const { text } = await fetchText(`${GNEWS}?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, { timeout: 12000 });
+  const items = xml.parse(text)?.rss?.channel?.item || [];
+  return items.slice(0, max).map((it) => {
+    const src = it.source;
+    const srcUrl = typeof src === 'object' ? src['@url'] || '' : '';
+    const srcName = (typeof src === 'object' ? src['#text'] : src) || '';
+    const domain = domainOf(srcUrl);
+    return {
+      title: clean(it.title).replace(new RegExp(`\\s+-\\s+${String(srcName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), ''),
+      url: String(it.link || ''),
+      domain,
+      name: String(srcName).replace(/\s*\(\.gov\)$/, '') || domain,
+      kind: sourceKind(domain),
+      text: clean(it.title),
+      meta: it.pubDate ? new Date(it.pubDate).toISOString().slice(0, 10) : '',
+      via: 'sitesearch',
+      fullText: false,
     };
   });
 }
 
 // ---------- Gathering ----------
 
-const SITE_PRIMARY = '(site:gov OR site:edu OR site:int OR site:who.int OR site:un.org OR site:worldbank.org OR site:oecd.org OR site:europa.eu OR site:gov.uk)';
-const SITE_FACTCHECK = `(${FACTCHECK_DOMAINS.slice(0, 4).map((d) => 'site:' + d).join(' OR ')})`;
+const SITES_OFFICIAL = ['gov', 'who.int', 'un.org', 'europa.eu', 'worldbank.org', 'oecd.org', 'imf.org'];
+const SITES_FACTCHECK = FACTCHECK_DOMAINS.slice(0, 4);
 
 /**
  * Find primary sources for an event.
@@ -135,12 +222,14 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
   step(`Searching research papers, government records and fact-checkers for: ${qs.join(' · ')}`);
 
   const jobs = [
-    ['OpenAlex', searchOpenAlex(qs[0])],
-    ...(qs[1] ? [['OpenAlex', searchOpenAlex(qs[1], { max: 5 })]] : []),
+    ['Research papers', searchPapers(qs[0])],
+    ...(qs[1] ? [['Research papers', searchPapers(qs[1], { max: 5 })]] : []),
+    ['Europe PMC', searchEuropePmc(qs[0])],
     ['Federal Register', searchFederalRegister(qs[0])],
-    ['Government & official sites', searchWeb(`${qs[0]} ${SITE_PRIMARY}`)],
-    ...(qs[1] ? [['Government & official sites', searchWeb(`${qs[1]} ${SITE_PRIMARY}`, { max: 6 })]] : []),
-    ['Fact-checkers', searchWeb(`${topic} ${SITE_FACTCHECK}`, { max: 6 })],
+    ['GOV.UK', searchGovUk(qs[0])],
+    ['Government & official sites', searchSites(qs[0], SITES_OFFICIAL)],
+    ...(qs[1] ? [['Government & official sites', searchSites(qs[1], SITES_OFFICIAL, { max: 5 })]] : []),
+    ['Fact-checkers', searchSites(topic, SITES_FACTCHECK, { max: 6 })],
   ];
   const settled = await Promise.allSettled(jobs.map((j) => j[1]));
   const errors = [];
@@ -152,7 +241,7 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
   // De-duplicate and drop plain news results from the web searches.
   const seen = new Set();
   candidates = candidates.filter((c) => {
-    if (!c.url || !c.title || c.kind === 'news') return false;
+    if (!c.url || !c.title || c.kind === 'news' || c.title === c.name) return false;
     const k = c.url.replace(/[?#].*$/, '');
     if (seen.has(k)) return false;
     seen.add(k);
@@ -164,10 +253,10 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
   const picked = await pickEvidence(candidates, { topic, claims });
   const chosen = picked.slice(0, 9);
 
-  // Read the full pages of non-paper sources (papers already come with abstracts).
-  step(`Reading ${chosen.length} primary source${chosen.length === 1 ? '' : 's'}…`);
+  // Papers and Federal Register entries come with abstracts; GOV.UK pages are read in full.
+  step(`Using ${chosen.length} primary source${chosen.length === 1 ? '' : 's'} of ${candidates.length} found…`);
   await mapLimit(
-    chosen.filter((c) => c.kind !== 'study' && c.via !== 'federalregister'),
+    chosen.filter((c) => c.via === 'govuk'),
     4,
     async (c) => {
       const page = await fetchArticle(c.url, { timeout: 12000 });
@@ -177,11 +266,11 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
       }
     }
   );
-  return { docs: chosen.map((c) => ({ ...c, fullText: c.fullText ?? c.kind === 'study' })), errors: [...new Set(errors)] };
+  return { docs: chosen.map((c) => ({ ...c, fullText: c.fullText ?? true })), errors: [...new Set(errors)] };
 }
 
 async function pickEvidence(candidates, { topic, claims }) {
-  if (!hasLLM()) return candidates.sort(byKindPriority);
+  if (!hasLLM()) return interleave(candidates);
   try {
     const r = await chatJSON(
       [
@@ -202,12 +291,20 @@ async function pickEvidence(candidates, { topic, claims }) {
     const idx = [...new Set((r.relevant || []).map(Number))].filter((n) => Number.isInteger(n) && n >= 0 && n < candidates.length);
     return idx.map((n) => candidates[n]);
   } catch {
-    return candidates.sort(byKindPriority);
+    return interleave(candidates);
   }
 }
 
 const KIND_PRIORITY = { factcheck: 0, gov: 1, official: 2, study: 3, research: 4, academic: 5, reference: 6, news: 7 };
-const byKindPriority = (a, b) => (KIND_PRIORITY[a.kind] ?? 9) - (KIND_PRIORITY[b.kind] ?? 9);
+// Without the AI filter: take the first result of each kind, then the second of each, and so on.
+function interleave(list) {
+  const groups = {};
+  for (const c of list) (groups[c.kind] ||= []).push(c);
+  const kinds = Object.keys(groups).sort((x, y) => (KIND_PRIORITY[x] ?? 9) - (KIND_PRIORITY[y] ?? 9));
+  const out = [];
+  for (let i = 0; out.length < list.length; i++) for (const k of kinds) if (groups[k][i]) out.push(groups[k][i]);
+  return out;
+}
 
 export const KIND_LABEL = {
   study: 'Study',

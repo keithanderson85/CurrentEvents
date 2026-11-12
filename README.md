@@ -16,7 +16,8 @@ _Screenshots use fictional sample data and placeholder images from the offline t
 - **Make your own events.** "New event" takes a topic (e.g. "War in Iran") and/or a few article links. It searches Bing News, Google News and GDELT plus the articles already gathered, has the AI keep only the ones really about the topic, and writes a summary. With **Keep tracking** on, new matching articles are added on every refresh; **Find more coverage** searches again on demand. Links from sites that block automated readers are still added (as link-only).
 - **Coverage by lean.** Each event shows how its coverage splits across left / center / right outlets.
 - **Deep dive.** Searches for more reporting (GDELT news search, Google News, Wikipedia), prioritising AP, Reuters, AFP, BBC, NPR, PBS, DW and similar, reads the articles and writes a cited briefing: bottom line, what's confirmed, disputed claims, background, how coverage differs, open questions. You can give it a focus, or dig into one specific article.
-- **Evidence, not just news.** Each deep dive pulls out the key factual claims and checks them against primary sources: research papers (OpenAlex), US government records (Federal Register), government, university and international-body sites (.gov, .edu, WHO, UN, World Bank, OECD, EU) and fact-checkers (PolitiFact, FactCheck.org, Snopes, Full Fact). The briefing gets an **Evidence check** (Supported / Partly supported / Contradicted / Unverified per claim) and sources are labelled Study, Government, Official body or Fact-check. Untick the box to skip it.
+- **Evidence, not just news.** Each deep dive pulls out the key factual claims and checks them against primary sources: research papers (OpenAlex, Crossref, Europe PMC), government records (US Federal Register, GOV.UK), government and international-body sites (.gov, WHO, UN, EU, World Bank, OECD, IMF) and fact-checkers (PolitiFact, FactCheck.org, Snopes, Full Fact). The briefing gets an **Evidence check** (Supported / Partly supported / Contradicted / Unverified per claim) and sources are labelled Study, Government, Official body or Fact-check. Untick the box to skip it.
+- **Chat that can search the web.** When a question goes beyond the event's articles, the chat searches news, Wikipedia, research papers and fact-checkers, reads the top results and cites them as W1, W2… with links.
 - **Notes & custom data.** Add labelled notes, pasted data or links (links are read automatically). Everything you add is used by chat and deep dives.
 - **Chat with an event.** Streaming chat that knows the event's articles, your notes and the latest briefing, and cites them.
 - Pin, rename, remove events; add or remove articles; search and filter by category; light and dark mode; works on mobile.
@@ -78,7 +79,7 @@ Front-page feeds (RSS, free, no keys), chosen to span the spectrum and include n
 
 BBC News, NPR, PBS NewsHour, Deutsche Welle, France 24, CBC, Al Jazeera, The Guardian, New York Times, ABC News, CBS News, CNBC, Wall Street Journal (world), The Hill, Sky News, Fox News, New York Post, Washington Examiner.
 
-Topic events and deep dives add **Bing News** and **GDELT** (news searches that return real article links and images), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Deep dives also search **OpenAlex** (scholarly papers with abstracts and citation counts), the **Federal Register**, and **Bing web search** limited to government, academic, international-body and fact-checking sites (`src/evidence.js`). All of these are free and need no key. Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
+Topic events and deep dives add **Bing News** and **GDELT** (news searches that return real article links and images), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Deep dives also search **OpenAlex** (scholarly papers with abstracts and citation counts; **Crossref** is the fallback), **Europe PMC**, the **Federal Register**, **GOV.UK**, and Google News limited to government, international-body and fact-checking sites (`src/evidence.js`). All are free and need no key. OpenAlex has a daily allowance per address; set `OPENALEX_API_KEY` (free from openalex.org) to raise it. Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
 
 ## How it works
 
@@ -89,7 +90,7 @@ src/cluster.js       AI grouping into events (keyword fallback without a key)
 src/refresh.js       Fetch → group → fill missing images (og:image) → prune
 src/research.js      Deep dive: plan searches, search, read, write cited briefing
 src/manual.js        User-created topic events: search, AI relevance check, tracking
-src/evidence.js      Primary sources: OpenAlex, Federal Register, .gov/.edu/official sites, fact-checkers
+src/evidence.js      Primary sources: research papers, government records, official sites, fact-checkers
 src/search.js        Bing News / Google News / GDELT search, merged and de-duplicated
 src/chat.js          Event-grounded streaming chat
 src/store.js         JSON-file storage in ./data (git-ignored)

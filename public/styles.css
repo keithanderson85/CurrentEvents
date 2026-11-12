@@ -568,3 +568,14 @@ body.chat-open .chat-fab { opacity: 0; pointer-events: none; }
 :root[data-theme='dark'] .kind.k-gov, :root[data-theme='dark'] .kind.k-official { color: #5eead4; }
 :root[data-theme='dark'] .kind.k-factcheck { color: #fcd34d; }
 :root[data-theme='dark'] .kind.k-research, :root[data-theme='dark'] .kind.k-reference { color: #cbd5e1; }
+
+/* ---------- Chat: web search status & results ---------- */
+.chat-status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.chat-status span { min-width: 0; overflow-wrap: anywhere; }
+.web-sources { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+.web-sources summary { cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 6px; list-style: none; }
+.web-sources summary::-webkit-details-marker { display: none; }
+.web-sources summary svg { width: 14px; height: 14px; }
+.web-sources a { display: flex; gap: 8px; padding: 6px 0; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.web-sources a:hover b { text-decoration: underline; }
+.web-sources .num { flex: none; font-size: 11px; font-weight: 700; color: var(--accent); min-width: 24px; padding-top: 2px; }

@@ -115,6 +115,14 @@ function mockLLM(body) {
       claims: ['Elena is the strongest Gulf storm in a decade', 'Warmer sea temperatures are making Gulf hurricanes intensify faster', 'More than 400,000 homes lost power'],
       evidence_queries: ['hurricane rapid intensification sea surface temperature', 'hurricane power outage restoration'],
     });
+  if (/needs a web search/.test(sys)) {
+    const q = (last.match(/QUESTION: (.*)/) || [])[1] || '';
+    return JSON.stringify(/look up|latest|how many|study|history|iran/i.test(q) ? { search: true, queries: ['Iran war', 'hurricane rapid intensification'], research: true } : { search: false, queries: [] });
+  }
+  if (/WEB SEARCH RESULTS/.test(sys)) {
+    const url = (sys.match(/\[W1\][^\n]*\nURL: (\S+)/) || [])[1] || 'https://example.org';
+    return `I searched the web for this.\n\n- **From the web:** a fresh report covers the point you asked about [W1](${url}).\n- **From this event's articles:** outages are reported across outlets (1)(2).\n\n*(Mock reply for testing.)*`;
+  }
   if (/select evidence for fact-checking/.test(sys)) {
     const lines = last.split('SOURCES:\n')[1].split('\n');
     return JSON.stringify({ relevant: lines.map((l, i) => (/unrelated/i.test(l) ? null : i)).filter((x) => x !== null) });
@@ -145,6 +153,18 @@ http
     }
     if (u.pathname === '/gnews/rss/search') {
       const q = u.searchParams.get('q') || '';
+      if (/site:/.test(q)) {
+        // Site-restricted searches: government sites and fact-checkers.
+        const ev = /politifact/.test(q)
+          ? [{ t: 'Is Elena the strongest Gulf storm in a decade? No evidence yet', s: 'FactCheck.org', u: 'https://www.factcheck.org' }]
+          : [
+              { t: 'Hurricane Elena advisory archive', s: 'National Hurricane Center (.gov)', u: 'https://www.nhc.noaa.gov' },
+              { t: 'Hurricane rapid intensification explained', s: 'National Weather Service (.gov)', u: 'https://www.weather.gov' },
+              { t: 'An unrelated news story', s: 'Example News', u: 'https://www.example-news.com' },
+            ];
+        const xml = ev.map((e, i) => `<item><title>${e.t} - ${e.s}</title><link>https://news.google.com/rss/articles/EV${i}${encodeURIComponent(e.s)}</link><pubDate>${new Date().toUTCString()}</pubDate><source url="${e.u}">${e.s}</source></item>`).join('');
+        return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${xml}</channel></rss>`);
+      }
       const hits = SEARCH_DB.filter((h) => h.terms.some((t) => q.toLowerCase().includes(t))).slice(0, 2);
       const items = hits.map((h) => `<item><title>${h.title} - ${h.source}</title><link>https://news.google.com/rss/articles/CBM${h.id}</link><pubDate>${new Date().toUTCString()}</pubDate><source url="https://example.org">${h.source}</source></item>`).join('');
       return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${items}</channel></rss>`);
@@ -161,18 +181,9 @@ http
     if (u.pathname === '/fedreg/documents.json') {
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results: [{ title: 'Emergency declaration: Gulf coast hurricane response', abstract: 'Preliminary outage and response figures for affected states. (Fictional.)', html_url: 'https://www.federalregister.gov/documents/2026/11/10/2026-00001/gulf-hurricane', publication_date: '2026-11-10', type: 'Notice', agencies: [{ name: 'Department of Energy' }] }] }));
     }
-    if (u.pathname === '/bingweb/search') {
-      const q = u.searchParams.get('q') || '';
-      const items = /politifact/.test(q)
-        ? [{ t: 'Is Elena the strongest Gulf storm in a decade? No evidence yet', l: 'https://www.factcheck.org/2026/11/elena-strongest-storm/' }]
-        : [
-            { t: 'Hurricane Elena advisory archive', l: 'https://www.nhc.noaa.gov/archive/2026/elena/' },
-            { t: 'Hurricane rapid intensification explained', l: 'https://www.weather.gov/safety/hurricane-ri' },
-            { t: 'Some news story', l: 'https://www.example-news.com/story' },
-          ];
-      const xml = items.map((i) => `<item><title>${i.t}</title><link>${i.l}</link><description>${i.t} — sample snippet.</description></item>`).join('');
-      return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${xml}</channel></rss>`);
-    }
+    if (u.pathname === '/europepmc/search') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ resultList: { result: [] } }));
+    if (u.pathname === '/govuk/search.json')
+      return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results: [{ title: 'Storm overflows and flood response statistics', link: '/government/statistics/flood-response', description: 'Official statistics on flood response. (Fictional.)', public_timestamp: '2026-10-01T09:00:00Z', organisations: [{ title: 'Environment Agency' }] }] }));
     if (u.pathname === '/gdelt/api/v2/doc/doc') return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Please limit requests to one every 5 seconds.');
     if (u.pathname === '/v1/models') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'deepseek/deepseek-v4.1-flash-1017' }] }));
     if (u.pathname === '/v1/chat/completions') {
