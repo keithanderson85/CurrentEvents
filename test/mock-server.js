@@ -74,7 +74,7 @@ function articlePage(id) {
   const title = s ? s.heads[SOURCES.indexOf(src) % s.heads.length] : id;
   return `<!doctype html><html><head><title>${title}</title><meta property="og:title" content="${title}"><meta property="og:image" content="${base}/img/${id}.svg?h=${hue}">
   <meta property="og:description" content="Fictional sample article."></head><body><article>
-  <p>This is a fictional sample article used to test the Current Events app. It stands in for the full text of “${title}”.</p>
+  <p>This is a fictional sample article used to test the OpenFrame News app. It stands in for the full text of “${title}”.</p>
   <p>Officials said the situation was developing and that more information would be released later in the day, according to the sample report.</p>
   <p>Different outlets emphasised different details, which the app's deep dive is designed to compare side by side for the reader.</p></article></body></html>`;
 }

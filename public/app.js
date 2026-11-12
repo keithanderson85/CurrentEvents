@@ -1,4 +1,4 @@
-// Current Events — front end (no build step, plain ES modules).
+// OpenFrame News — front end (no build step, plain ES modules).
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -272,7 +272,7 @@ function renderFilters() {
 }
 
 async function renderHome() {
-  document.title = 'Current Events';
+  document.title = 'OpenFrame News · The news, in context';
   app.innerHTML = `
     <div class="page-head">
       <div>
@@ -342,7 +342,7 @@ async function renderEvent(id) {
     return;
   }
   if (ev.researched && state.tab === 'coverage' && false) state.tab = 'dive';
-  document.title = `${ev.title} · Current Events`;
+  document.title = `${ev.title} · OpenFrame News`;
   app.innerHTML = `
     <a href="#/" class="back">${icons.back} All events</a>
     <section class="hero" id="hero"></section>

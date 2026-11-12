@@ -1,6 +1,8 @@
-# Current Events
+<p align="center"><img src="public/brand/logo-full.png" alt="OpenFrame News — The news, in context." width="560"></p>
 
-A personal news dashboard that pulls articles from a balanced set of outlets, groups them into **events**, and lets you dig into each one with AI: a neutral deep-dive briefing built from wire services and public broadcasters, your own notes and custom data, and a chat grounded in the coverage.
+# OpenFrame News
+
+**The news, in context.** A personal news dashboard that pulls articles from a balanced set of outlets, groups them into **events**, and lets you dig into each one with AI: a neutral deep-dive briefing built from wire services and public broadcasters, your own notes and custom data, and a chat grounded in the coverage.
 
 ![Home](docs/home.png)
 ![Event](docs/event.png)
@@ -47,8 +49,8 @@ Or use the prebuilt image that GitHub builds on every push to `main` (amd64 and 
 
 ```bash
 docker login ghcr.io -u keithanderson85     # password: a GitHub token with read:packages (needed while the repo is private)
-docker run -d --name currentevents -p 3000:3000 --env-file .env \
-  -v currentevents-data:/app/data --restart unless-stopped \
+docker run -d --name openframe-news -p 3000:3000 --env-file .env \
+  -v openframe-data:/app/data --restart unless-stopped \
   ghcr.io/keithanderson85/currentevents:latest
 ```
 

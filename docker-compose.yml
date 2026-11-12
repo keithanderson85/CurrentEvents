@@ -2,7 +2,7 @@ services:
   app:
     image: ghcr.io/keithanderson85/currentevents:latest
     build: .
-    container_name: currentevents
+    container_name: openframe-news
     ports:
       - "3000:3000"
     env_file: .env          # holds OPENROUTER_API_KEY; never committed

@@ -309,7 +309,7 @@ app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(config.root, 'pub
 // ---------- Start ----------
 
 const server = app.listen(config.port, async () => {
-  console.log(`Current Events running at http://localhost:${config.port}`);
+  console.log(`OpenFrame News running at http://localhost:${config.port}`);
   if (!hasLLM()) {
     console.log('No OPENROUTER_API_KEY set: using keyword grouping; deep dive shows sources only; chat disabled.');
   } else {

@@ -1,7 +1,7 @@
 {
-  "name": "current-events",
+  "name": "openframe-news",
   "version": "1.0.0",
-  "description": "Groups current news into events, with AI deep dives, notes and chat.",
+  "description": "OpenFrame News: the news, in context. Groups current news into events, with AI deep dives, notes and chat.",
   "main": "server.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",

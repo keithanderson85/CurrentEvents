@@ -16,7 +16,7 @@ function headers() {
     'Content-Type': 'application/json',
     // Optional attribution headers OpenRouter shows on its dashboard.
     'HTTP-Referer': 'http://localhost',
-    'X-Title': 'Current Events',
+    'X-Title': 'OpenFrame News',
   };
 }
 

@@ -25,7 +25,7 @@ export const config = {
   maxArticlesPerFeed: num(process.env.MAX_ARTICLES_PER_FEED, 25),
   userAgent:
     process.env.FETCH_USER_AGENT ||
-    'Mozilla/5.0 (compatible; CurrentEventsReader/1.0; personal news aggregator)',
+    'Mozilla/5.0 (compatible; OpenFrameNewsReader/1.0; personal news aggregator)',
 };
 
 export function hasLLM() {
