@@ -178,6 +178,10 @@ function spectrumDots(leans) {
 
 function route() {
   clearInterval(state.pollTimer);
+  if ($('#chat')?.classList.contains('open')) closeChatSheet({ fromHistory: true });
+  document.body.classList.remove('chat-open');
+  askObserver?.disconnect();
+  $('#chatFab')?.classList.remove('show');
   const hash = location.hash || '#/';
   const m = hash.match(/^#\/event\/([\w-]+)/);
   window.scrollTo(0, 0);
@@ -347,16 +351,21 @@ async function renderEvent(id) {
     <a href="#/" class="back">${icons.back} All events</a>
     <section class="hero" id="hero"></section>
     <div class="layout">
+      <div class="ask-bar" id="askBar">
+        <button type="button" class="ask-input" data-open-chat>${icons.chat}<span>Ask about this event…</span></button>
+        <button type="button" class="btn accent" id="askDive">${icons.dive} Deep dive</button>
+      </div>
       <div>
         <nav class="tabs" id="tabs"></nav>
         <div id="tabBody"></div>
       </div>
-      <aside class="chat" id="chat"></aside>
+      <aside class="chat" id="chat" aria-label="Chat about this event"></aside>
     </div>`;
   paintHero();
   paintTabs();
   paintTab();
   paintChat();
+  setupChatSheet();
   startEventPolling();
 }
 
@@ -779,8 +788,8 @@ function paintChat() {
     <div class="chat-head">
       <div><h3>Ask about this event</h3><div class="sub">Uses the articles, your notes and deep dives</div></div>
       <div class="chat-head-tools">
-        <button class="btn sm accent mobile-only" id="chatDive">${icons.dive} Deep dive</button>
         ${ev.chat.length ? `<button class="btn sm ghost" id="clearChat" title="Clear conversation">${icons.trash}</button>` : ''}
+        <button class="btn icon ghost mobile-only" id="chatClose" aria-label="Close chat">${icons.x}</button>
       </div>
     </div>
     <div class="chat-log" id="chatLog">${chatLogHTML()}</div>
@@ -795,7 +804,7 @@ function paintChat() {
     const s = e.target.closest('[data-suggest]');
     if (s && llm) sendChat(s.textContent);
   };
-  $('#chatDive')?.addEventListener('click', openDive);
+  $('#chatClose')?.addEventListener('click', () => closeChatSheet());
   $('#clearChat')?.addEventListener('click', async () => {
     await api(`/api/events/${ev.id}/chat`, { method: 'DELETE' });
     ev.chat = [];
@@ -822,6 +831,62 @@ function paintChat() {
     ta.style.height = 'auto';
     sendChat(m);
   });
+}
+
+// ---------- Mobile: chat as a full-screen sheet ----------
+// On narrow screens the chat isn't an inline scrolling box (fingers got caught in it while
+// scrolling the page). A compact bar opens it full-screen; ✕ or the back gesture closes it.
+
+const isNarrow = () => matchMedia('(max-width: 1080px)').matches;
+
+function openChatSheet({ focus = true } = {}) {
+  const chat = $('#chat');
+  if (!chat || chat.classList.contains('open')) return;
+  chat.classList.add('open');
+  document.body.classList.add('chat-open');
+  history.pushState({ chatSheet: true }, '');
+  const log = $('#chatLog');
+  if (log) log.scrollTop = log.scrollHeight;
+  if (focus) setTimeout(() => $('#chatForm textarea')?.focus(), 280);
+}
+
+function closeChatSheet({ fromHistory = false } = {}) {
+  const chat = $('#chat');
+  if (!chat || !chat.classList.contains('open')) return;
+  chat.classList.remove('open');
+  document.body.classList.remove('chat-open');
+  document.activeElement?.blur?.();
+  if (!fromHistory && history.state?.chatSheet) history.back();
+}
+
+window.addEventListener('popstate', () => closeChatSheet({ fromHistory: true }));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#chat')?.classList.contains('open')) closeChatSheet();
+});
+
+let askObserver;
+function setupChatSheet() {
+  $('#askBar').addEventListener('click', (e) => {
+    if (e.target.closest('[data-open-chat]')) openChatSheet();
+  });
+  $('#askDive').addEventListener('click', openDive);
+  let fab = $('#chatFab');
+  if (!fab) {
+    fab = document.createElement('button');
+    fab.id = 'chatFab';
+    fab.className = 'chat-fab';
+    fab.type = 'button';
+    fab.setAttribute('aria-label', 'Ask about this event');
+    fab.innerHTML = icons.chat;
+    fab.addEventListener('click', () => openChatSheet());
+    document.body.appendChild(fab);
+  }
+  // Show the floating button only once the ask bar has scrolled out of view.
+  askObserver?.disconnect();
+  askObserver = new IntersectionObserver(([entry]) =>
+    fab.classList.toggle('show', !entry.isIntersecting && entry.boundingClientRect.top < 0 && location.hash.startsWith('#/event'))
+  );
+  askObserver.observe($('#askBar'));
 }
 
 function chatLogHTML() {
