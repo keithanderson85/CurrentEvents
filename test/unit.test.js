@@ -58,3 +58,15 @@ test('rates known domains', () => {
   assert.equal(domainInfo('https://apnews.com/article/x').neutral, true);
   assert.equal(domainInfo('https://edition.cnn.com/x').lean, 'left');
 });
+
+test('sourceKind labels primary sources', async () => {
+  const { sourceKind } = await import('../src/evidence.js');
+  assert.equal(sourceKind('https://www.cdc.gov/flu/data.html'), 'gov');
+  assert.equal(sourceKind('https://www.ons.gov.uk/economy'), 'gov');
+  assert.equal(sourceKind('https://www.who.int/news/item/x'), 'official');
+  assert.equal(sourceKind('https://www.politifact.com/factchecks/2026/x'), 'factcheck');
+  assert.equal(sourceKind('https://news.stanford.edu/story'), 'academic');
+  assert.equal(sourceKind('https://www.nature.com/articles/x'), 'study');
+  assert.equal(sourceKind('https://www.pewresearch.org/x'), 'research');
+  assert.equal(sourceKind('https://www.example-news.com/story'), 'news');
+});

@@ -4,6 +4,7 @@ import { hasLLM } from './config.js';
 import { fetchText, fetchArticle, mapLimit, truncate } from './fetcher.js';
 import { domainInfo, domainOf, NEUTRAL_DOMAINS } from './sources.js';
 import { searchNews, searchGoogleNews } from './search.js';
+import { gatherEvidence, sourceKind } from './evidence.js';
 
 // "Deep dive": go beyond the articles we already have, prioritising wire services and
 // public broadcasters, then have the model write a neutral, cited briefing.
@@ -12,6 +13,7 @@ import { searchNews, searchGoogleNews } from './search.js';
 //   - Bing News + GDELT (see search.js): searches that return real article URLs.
 //   - Google News RSS search: headline-level corroboration across many outlets.
 //   - Wikipedia: background context.
+//   - evidence.js: research papers, government records, official bodies and fact-checkers.
 
 export async function searchWikipedia(query) {
   const api = 'https://en.wikipedia.org/w/api.php';
@@ -35,7 +37,7 @@ export async function searchWikipedia(query) {
 }
 
 async function planQueries(event, articles, focus) {
-  const fallback = { queries: [event.title], questions: [], background: event.title };
+  const fallback = { queries: [event.title], questions: [], background: event.title, claims: [], evidenceQueries: [event.title] };
   if (!hasLLM()) return fallback;
   try {
     const r = await chatJSON(
@@ -43,7 +45,7 @@ async function planQueries(event, articles, focus) {
         {
           role: 'system',
           content:
-            'You plan news research. Given a news event, return JSON {"queries":[2-3 short keyword search queries (3-6 words, no quotes or operators) likely to find more reporting on this exact event],"background":"a 1-4 word Wikipedia search term for background context","questions":[3-5 key open questions a careful reader would want answered]}.',
+            'You plan research on a news event. Return JSON {"queries":[2-3 short keyword search queries (3-6 words, no quotes or operators) likely to find more reporting on this exact event],"background":"a 1-4 word Wikipedia search term for background context","questions":[3-5 key open questions a careful reader would want answered],"claims":[3-5 specific, checkable factual claims made in the coverage: numbers, causes, legal or scientific statements],"evidence_queries":[2 short queries (3-7 words) to find research papers, government reports, official statistics or legal documents that would confirm or refute those claims; use technical or policy wording, not headline wording]}.',
         },
         {
           role: 'user',
@@ -53,12 +55,14 @@ async function planQueries(event, articles, focus) {
             .join('\n')}${focus ? `\n\nThe reader specifically wants to dig into: ${focus}` : ''}`,
         },
       ],
-      { temperature: 0.2, maxTokens: 600 }
+      { temperature: 0.2, maxTokens: 900 }
     );
     return {
       queries: (r.queries || []).filter(Boolean).slice(0, 3).length ? r.queries.slice(0, 3) : fallback.queries,
       questions: (r.questions || []).slice(0, 5),
       background: r.background || event.title,
+      claims: (r.claims || []).map(String).filter(Boolean).slice(0, 5),
+      evidenceQueries: (r.evidence_queries || r.evidenceQueries || []).map(String).filter(Boolean).slice(0, 2),
     };
   } catch {
     return fallback;
@@ -67,7 +71,7 @@ async function planQueries(event, articles, focus) {
 
 const LEAN_ORDER = ['center', 'lean-left', 'lean-right', 'left', 'right', 'unknown'];
 
-export async function runDeepDive(eventId, { focus = '', articleId = null } = {}) {
+export async function runDeepDive(eventId, { focus = '', articleId = null, evidence = true } = {}) {
   const store = db();
   const event = store.events[eventId];
   if (!event) throw new Error('Event not found');
@@ -85,7 +89,7 @@ export async function runDeepDive(eventId, { focus = '', articleId = null } = {}
   event.research.unshift(report);
   save();
   // Run in the background; the client polls the event to watch progress.
-  deepDive(event, report, { focus: report.focus, articleId }).catch((e) => {
+  deepDive(event, report, { focus: report.focus, articleId, evidence }).catch((e) => {
     report.status = 'error';
     report.error = e.message;
     save();
@@ -93,7 +97,7 @@ export async function runDeepDive(eventId, { focus = '', articleId = null } = {}
   return report;
 }
 
-async function deepDive(event, report, { focus, articleId }) {
+async function deepDive(event, report, { focus, articleId, evidence = true }) {
   const store = db();
   const step = (msg) => {
     report.progress.push(msg);
@@ -105,6 +109,8 @@ async function deepDive(event, report, { focus, articleId }) {
   const plan = await planQueries(event, own, focus);
   report.queries = plan.queries;
   report.questions = plan.questions;
+  report.claims = plan.claims;
+  report.evidence = evidence;
 
   step(`Searching news archives for: ${plan.queries.join(' · ')}`);
   const neutralSites = ['apnews.com', 'reuters.com', 'bbc.com', 'npr.org', 'pbs.org'];
@@ -156,7 +162,16 @@ async function deepDive(event, report, { focus, articleId }) {
     if (!text && c.via !== 'event') return;
     docs.push({ ...c, text: text || c.title, fullText: Boolean(textOk) });
   });
-  for (const w of found.filter((f) => f.via === 'wikipedia')) docs.push({ ...w, fullText: true });
+  for (const w of found.filter((f) => f.via === 'wikipedia')) docs.push({ ...w, kind: 'reference', fullText: true });
+
+  // Primary sources: research, government records, official bodies, fact-checkers.
+  if (evidence) {
+    const evQueries = plan.evidenceQueries?.length ? plan.evidenceQueries : [event.title];
+    const ev = await gatherEvidence({ queries: evQueries, claims: plan.claims, topic: event.title, step }).catch((e) => ({ docs: [], errors: [e.message] }));
+    if (ev.errors.length) step(`Some evidence sources didn't respond (${ev.errors.join(', ')}); continuing.`);
+    if (!ev.docs.length) step('No relevant research or official documents found for this story.');
+    docs.push(...ev.docs);
+  }
 
   // Headline-only corroboration from Google News: many outlets, no full text.
   const headlines = found
@@ -176,6 +191,8 @@ async function deepDive(event, report, { focus, articleId }) {
       neutral: info.neutral || (d.via === 'event' && d.lean === 'center'),
       via: d.via,
       fullText: d.fullText,
+      kind: d.kind || (d.via === 'event' ? 'news' : sourceKind(d.url || d.domain || '')),
+      meta: d.meta || '',
     };
   });
   report.headlines = headlines.map((h) => {
@@ -197,7 +214,8 @@ async function deepDive(event, report, { focus, articleId }) {
   const sourceBlock = docs
     .map((d, i) => {
       const s = report.sources[i];
-      return `[${i + 1}] ${s.name} (${s.lean}${s.neutral ? ', wire/public/high-factual' : ''}) — ${d.title}\n${d.text}`;
+      const label = s.kind && s.kind !== 'news' ? `${s.kind.toUpperCase()} — ${s.name}${s.meta ? ` (${s.meta})` : ''}` : `NEWS — ${s.name} (${s.lean}${s.neutral ? ', wire/public/high-factual' : ''})`;
+      return `[${i + 1}] ${label} — ${d.title}\n${d.text}`;
     })
     .join('\n\n---\n\n');
 
@@ -208,11 +226,17 @@ Principles:
 - Cite sources inline with bracketed numbers like [1] or [2][5]. Every factual sentence needs a citation.
 - Note where outlets frame the story differently (word choice, emphasis, what they omit), naming outlets.
 - Use plain, neutral language. No speculation beyond flagging open questions.
+- Sources are labelled NEWS, STUDY (peer-reviewed or scholarly work), GOV (government record or agency), OFFICIAL (international body), FACTCHECK, RESEARCH (research organisation), ACADEMIC, REFERENCE. Primary sources (STUDY, GOV, OFFICIAL, FACTCHECK) outrank news for factual claims. When a primary source and news coverage disagree, say so explicitly.
+- Only use a primary source if it really bears on the story; note its date and scope (e.g. a 2019 study is background, not proof of what happened this week). Never overstate what a study shows.
 Format as Markdown with these sections:
 ## Bottom line
 (2-3 sentences)
 ## What we know
 (bulleted, cited facts that are well corroborated)
+## Evidence check
+(one bullet per key claim: **Claim** — verdict in bold: Supported / Partly supported / Contradicted / Unverified — one sentence on why, citing primary sources where they exist and saying plainly when none were found)
+## What the research and official records say
+(bulleted findings from STUDY/GOV/OFFICIAL/FACTCHECK sources with dates; write "No relevant primary sources were found." if there are none)
 ## Claims & disputed points
 (bulleted; who claims what, and what's contested or unverified)
 ## Background
@@ -224,7 +248,7 @@ Format as Markdown with these sections:
 
   const user = `EVENT: ${event.title}\nCURRENT SUMMARY: ${event.summary}${focus ? `\n\nREADER'S FOCUS: ${focus} — give this extra depth.` : ''}${
     plan.questions?.length ? `\n\nQUESTIONS TO ADDRESS IF THE SOURCES ALLOW:\n${plan.questions.map((q) => '- ' + q).join('\n')}` : ''
-  }${userNotes ? `\n\nREADER'S OWN NOTES (context, not sources):\n${userNotes}` : ''}\n\nOTHER HEADLINES SEEN (headline only, for corroboration, not citable):\n${headlines
+  }${plan.claims?.length ? `\n\nKEY CLAIMS TO CHECK IN "Evidence check":\n${plan.claims.map((c) => '- ' + c).join('\n')}` : ''}${userNotes ? `\n\nREADER'S OWN NOTES (context, not sources):\n${userNotes}` : ''}\n\nOTHER HEADLINES SEEN (headline only, for corroboration, not citable):\n${headlines
     .map((h) => `- (${h.sourceName || h.domain}) ${h.title}`)
     .join('\n')}\n\nSOURCES:\n${sourceBlock}`;
 
@@ -233,7 +257,7 @@ Format as Markdown with these sections:
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { model: currentModel('research'), temperature: 0.2, maxTokens: 3500 }
+    { model: currentModel('research'), temperature: 0.2, maxTokens: 4500 }
   );
   report.status = 'done';
   step('Done.');

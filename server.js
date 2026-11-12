@@ -260,7 +260,7 @@ app.post(
     const ev = getEvent(req, res);
     if (!ev) return;
     if (ev.research?.some((r) => r.status === 'running')) return res.status(409).json({ error: 'A deep dive is already running.' });
-    res.json(await runDeepDive(ev.id, { focus: req.body?.focus || '', articleId: req.body?.articleId || null }));
+    res.json(await runDeepDive(ev.id, { focus: req.body?.focus || '', articleId: req.body?.articleId || null, evidence: req.body?.evidence !== false }));
   })
 );
 

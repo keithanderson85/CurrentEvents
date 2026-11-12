@@ -107,10 +107,21 @@ function mockLLM(body) {
     const lines = last.split('ARTICLES:\n')[1].split('\n');
     return JSON.stringify({ relevant: lines.map((l, i) => (/iran/i.test(l) && !/recipe/i.test(l) ? i : null)).filter((x) => x !== null) });
   }
-  if (/plan news research/.test(sys)) return JSON.stringify({ queries: ['storm elena landfall', 'elena power outages'], background: 'Tropical cyclone', questions: ['How many people lost power?', 'What is the forecast track?'] });
+  if (/plan research on a news event/.test(sys))
+    return JSON.stringify({
+      queries: ['storm elena landfall', 'elena power outages'],
+      background: 'Tropical cyclone',
+      questions: ['How many people lost power?', 'What is the forecast track?'],
+      claims: ['Elena is the strongest Gulf storm in a decade', 'Warmer sea temperatures are making Gulf hurricanes intensify faster', 'More than 400,000 homes lost power'],
+      evidence_queries: ['hurricane rapid intensification sea surface temperature', 'hurricane power outage restoration'],
+    });
+  if (/select evidence for fact-checking/.test(sys)) {
+    const lines = last.split('SOURCES:\n')[1].split('\n');
+    return JSON.stringify({ relevant: lines.map((l, i) => (/unrelated/i.test(l) ? null : i)).filter((x) => x !== null) });
+  }
   if (/neutral news summaries/.test(sys)) return JSON.stringify({ title: 'Sample event summary', summary: 'A sample neutral summary of the event. (Fictional.)', category: 'World' });
   if (/research analyst/.test(sys))
-    return `## Bottom line\nStorm Elena made landfall on the Gulf coast, causing widespread outages [1][2]. Officials urged residents to shelter in place [3].\n\n## What we know\n- Landfall occurred overnight, according to multiple outlets [1][2][3].\n- Thousands of homes lost power [1][4].\n\n## Claims & disputed points\n- One outlet described the storm as the strongest in a decade; this is **not corroborated** by others [5].\n\n## Background\nGulf storms of this kind typically form in late summer [6].\n\n## How coverage differs\n- **BBC News** and **PBS** focus on official guidance [1][3]; **Fox News** emphasises the federal response [5].\n\n## Open questions\n- How long will restoration take?\n\n## Source quality note\nCore facts are consistent across wire-style and public-broadcaster sources. *(Fictional sample briefing.)*`;
+    return `## Bottom line\nStorm Elena made landfall on the Gulf coast, causing widespread outages [1][2]. Officials urged residents to shelter in place [3]. Research supports the link between warm water and faster strengthening, but not the "strongest in a decade" label [8][10].\n\n## What we know\n- Landfall occurred overnight, according to multiple outlets [1][2][3].\n- Thousands of homes lost power [1][4].\n\n## Evidence check\n- **Elena is the strongest Gulf storm in a decade** — **Unverified.** Only one outlet says this, and the agency storm records don't support it yet [5][10].\n- **Warmer seas make Gulf hurricanes intensify faster** — **Supported.** A peer-reviewed study of 1982–2020 storms found rapid intensification has become more frequent as sea surface temperatures rose [8].\n- **More than 400,000 homes lost power** — **Partly supported.** News reports give this figure [1][4]; the federal outage summary lists a lower preliminary count [9].\n\n## What the research and official records say\n- A 2023 study in *Nature Communications* links warmer Gulf waters to more frequent rapid intensification [8].\n- The Department of Energy's preliminary situation report lists outages by state [9].\n- A fact-check found the "strongest in a decade" claim has no basis in the official records so far [11].\n\n## Claims & disputed points\n- One outlet described the storm as the strongest in a decade; this is **not corroborated** by others [5].\n\n## Background\nGulf storms of this kind typically form in late summer [6].\n\n## How coverage differs\n- **BBC News** and **PBS** focus on official guidance [1][3]; **Fox News** emphasises the federal response [5].\n\n## Open questions\n- How long will restoration take?\n\n## Source quality note\nCore facts are consistent across wire-style and public-broadcaster sources. *(Fictional sample briefing.)*`;
   return `Here's what the sources say:\n\n- **Confirmed:** landfall and power outages are reported across outlets (1)(2).\n- **Disputed:** claims about storm strength vary [1].\n\n*(This is a mock reply for testing.)*`;
 }
 
@@ -137,6 +148,30 @@ http
       const hits = SEARCH_DB.filter((h) => h.terms.some((t) => q.toLowerCase().includes(t))).slice(0, 2);
       const items = hits.map((h) => `<item><title>${h.title} - ${h.source}</title><link>https://news.google.com/rss/articles/CBM${h.id}</link><pubDate>${new Date().toUTCString()}</pubDate><source url="https://example.org">${h.source}</source></item>`).join('');
       return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${items}</channel></rss>`);
+    }
+    // Fake primary-source APIs (OpenAlex, Federal Register, Bing web search).
+    if (u.pathname === '/openalex/works') {
+      const abs = (t) => Object.fromEntries([...new Set(t.split(' '))].map((w) => [w, t.split(' ').flatMap((x, i) => (x === w ? [i] : []))]));
+      const results = [
+        { id: 'https://openalex.org/W1', doi: 'https://doi.org/10.1038/s41467-023-00001', title: 'Rapid intensification of Atlantic hurricanes has increased with warming sea surface temperatures', publication_year: 2023, cited_by_count: 214, primary_location: { source: { display_name: 'Nature Communications' }, landing_page_url: 'https://www.nature.com/articles/s41467-023-00001' }, abstract_inverted_index: abs('We analyse 1982 to 2020 Atlantic storms and find rapid intensification events have become more frequent as sea surface temperatures rose. (Fictional test abstract.)'), open_access: {} },
+        { id: 'https://openalex.org/W2', title: 'An unrelated study of crop yields', publication_year: 2015, cited_by_count: 3, primary_location: { source: { display_name: 'Agronomy Journal' } }, abstract_inverted_index: abs('Crop yields vary with soil.'), open_access: {} },
+      ];
+      return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results }));
+    }
+    if (u.pathname === '/fedreg/documents.json') {
+      return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results: [{ title: 'Emergency declaration: Gulf coast hurricane response', abstract: 'Preliminary outage and response figures for affected states. (Fictional.)', html_url: 'https://www.federalregister.gov/documents/2026/11/10/2026-00001/gulf-hurricane', publication_date: '2026-11-10', type: 'Notice', agencies: [{ name: 'Department of Energy' }] }] }));
+    }
+    if (u.pathname === '/bingweb/search') {
+      const q = u.searchParams.get('q') || '';
+      const items = /politifact/.test(q)
+        ? [{ t: 'Is Elena the strongest Gulf storm in a decade? No evidence yet', l: 'https://www.factcheck.org/2026/11/elena-strongest-storm/' }]
+        : [
+            { t: 'Hurricane Elena advisory archive', l: 'https://www.nhc.noaa.gov/archive/2026/elena/' },
+            { t: 'Hurricane rapid intensification explained', l: 'https://www.weather.gov/safety/hurricane-ri' },
+            { t: 'Some news story', l: 'https://www.example-news.com/story' },
+          ];
+      const xml = items.map((i) => `<item><title>${i.t}</title><link>${i.l}</link><description>${i.t} — sample snippet.</description></item>`).join('');
+      return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${xml}</channel></rss>`);
     }
     if (u.pathname === '/gdelt/api/v2/doc/doc') return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Please limit requests to one every 5 seconds.');
     if (u.pathname === '/v1/models') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'deepseek/deepseek-v4.1-flash-1017' }] }));

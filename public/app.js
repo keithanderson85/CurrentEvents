@@ -569,16 +569,29 @@ function diveHTML() {
     <div class="panel dive-start">
       <div>
         <h3>Dig deeper</h3>
-        <p class="muted" style="margin:-6px 0 0;font-size:14px">Searches for more reporting — prioritising wire services (AP, Reuters, AFP) and public broadcasters — reads it, and writes a neutral briefing that separates confirmed facts from claims, with citations.</p>
+        <p class="muted" style="margin:-6px 0 0;font-size:14px">Finds more reporting (wire services and public broadcasters first), then checks the key claims against research papers, government records, official bodies and fact-checkers. You get a neutral, cited briefing that says what the evidence supports.</p>
       </div>
-      <form class="row" id="diveForm">
-        <input class="input" id="diveFocus" name="focus" placeholder="Optional focus, e.g. “economic impact” or “who is responsible?”" />
-        <button class="btn accent" type="submit" ${running ? 'disabled' : ''}>${icons.dive} ${running ? 'Researching…' : 'Start deep dive'}</button>
+      <form id="diveForm" class="dive-form">
+        <div class="row">
+          <input class="input" id="diveFocus" name="focus" placeholder="Optional focus, e.g. “economic impact” or “who is responsible?”" />
+          <button class="btn accent" type="submit" ${running ? 'disabled' : ''}>${icons.dive} ${running ? 'Researching…' : 'Start deep dive'}</button>
+        </div>
+        <label class="check"><input type="checkbox" name="evidence" ${state.evidence === false ? '' : 'checked'} /> <span>Check claims against research, government data &amp; fact-checkers</span></label>
       </form>
     </div>`;
   const reports = ev.research.map((r, i) => reportHTML(r, i)).join('');
   return start + reports;
 }
+
+const KIND_LABEL = {
+  study: 'Study',
+  gov: 'Government',
+  official: 'Official body',
+  factcheck: 'Fact-check',
+  research: 'Research org',
+  academic: 'Academic',
+  reference: 'Reference',
+};
 
 function reportHTML(r, i) {
   const pre = `src-${r.id}-`;
@@ -589,16 +602,27 @@ function reportHTML(r, i) {
       : r.status === 'error'
       ? `<p style="color:#dc2626">Deep dive failed: ${esc(r.error)}</p>`
       : `<div class="prose">${md(r.briefing, { citePrefix: pre })}</div>`;
-  const sources = r.sources?.length
-    ? `<details class="more" ${i === 0 ? 'open' : ''}><summary>Sources (${r.sources.length})</summary><div class="sources">${r.sources
-        .map(
-          (s) => `<a class="source" id="${pre}${s.n}" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">
+  const srcLink = (s) => {
+    const primary = s.kind && s.kind !== 'news';
+    const tags = primary
+      ? `<span class="kind k-${esc(s.kind)}">${KIND_LABEL[s.kind] || esc(s.kind)}</span>`
+      : `${s.neutral ? '<span class="tag-neutral">NEUTRAL</span>' : ''}<span class="lean ${esc(s.lean)}">${leanLabel(s.lean)}</span>`;
+    return `<a class="source" id="${pre}${s.n}" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">
             <span class="num">${s.n}</span>
-            <span class="t"><b>${esc(s.name)}</b> — ${esc(s.title)}</span>
-            <span class="tags">${s.neutral ? '<span class="tag-neutral">NEUTRAL</span>' : ''}<span class="lean ${esc(s.lean)}">${leanLabel(s.lean)}</span></span>
-          </a>`
-        )
-        .join('')}</div></details>`
+            <span class="t"><b>${esc(s.name)}</b> — ${esc(s.title)}${s.meta ? `<span class="src-meta">${esc(s.meta)}</span>` : ''}</span>
+            <span class="tags">${tags}</span>
+          </a>`;
+  };
+  const evidenceSrc = (r.sources || []).filter((s) => s.kind && s.kind !== 'news');
+  const newsSrc = (r.sources || []).filter((s) => !s.kind || s.kind === 'news');
+  const sources = r.sources?.length
+    ? `${
+        evidenceSrc.length
+          ? `<details class="more" ${i === 0 ? 'open' : ''}><summary>Evidence &amp; primary sources (${evidenceSrc.length})</summary><div class="sources">${evidenceSrc.map(srcLink).join('')}</div></details>`
+          : r.evidence && r.status === 'done'
+          ? `<p class="muted small-note">No research papers, government records or fact-checks matched this story closely enough to use.</p>`
+          : ''
+      }${newsSrc.length ? `<details class="more" ${i === 0 ? 'open' : ''}><summary>News coverage (${newsSrc.length})</summary><div class="sources">${newsSrc.map(srcLink).join('')}</div></details>` : ''}`
     : '';
   const heads = r.headlines?.length
     ? `<details class="more"><summary>Other headlines seen (${r.headlines.length})</summary><div class="sources">${r.headlines
@@ -741,6 +765,7 @@ function bindTab() {
   });
   $('#diveForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
+    state.evidence = e.target.evidence.checked;
     startDive({ focus: e.target.focus.value });
   });
   $('#noteForm')?.addEventListener('submit', async (e) => {
@@ -765,7 +790,7 @@ function bindTab() {
 async function startDive({ focus = '', articleId = null }) {
   const ev = state.event;
   try {
-    await api(`/api/events/${ev.id}/research`, { method: 'POST', body: { focus, articleId } });
+    await api(`/api/events/${ev.id}/research`, { method: 'POST', body: { focus, articleId, evidence: state.evidence !== false } });
     await loadEvent(ev.id);
     state.tab = 'dive';
     paintTabs();
