@@ -14,6 +14,13 @@ const STORIES = [
   { key: 'solo1', heads: ['Local library celebrates centennial with community festival'], hue: 90 },
   { key: 'solo2', heads: ['Marathon champion announces retirement after record career'], hue: 330 },
 ];
+const SEARCH_DB = [
+  { id: 'iran-ap', title: 'Iran conflict: strikes reported near Isfahan as tensions rise', source: 'Associated Press', terms: ['iran'], hue: 15 },
+  { id: 'iran-reuters', title: 'Oil prices jump as Iran conflict escalates', source: 'Reuters', terms: ['iran'], hue: 45 },
+  { id: 'iran-bbc', title: 'What we know about the fighting involving Iran', source: 'BBC News', terms: ['iran'], hue: 200 },
+  { id: 'iran-fox', title: 'Lawmakers react to escalating Iran war', source: 'Fox News', terms: ['iran'], hue: 350 },
+  { id: 'iran-recipe', title: 'Iranian saffron rice recipe for the holidays', source: 'Food Weekly', terms: ['iran'], hue: 60 },
+];
 const SOURCES = ['bbc', 'npr', 'fox', 'guardian', 'pbs', 'dw', 'nypost'];
 const NAMES = { bbc: 'BBC News', npr: 'NPR', fox: 'Fox News', guardian: 'The Guardian', pbs: 'PBS NewsHour', dw: 'Deutsche Welle', nypost: 'New York Post' };
 const LEANS = { bbc: 'center', npr: 'lean-left', fox: 'right', guardian: 'lean-left', pbs: 'center', dw: 'center', nypost: 'lean-right' };
@@ -74,7 +81,7 @@ function articlePage(id) {
 
 function mockLLM(body) {
   const sys = body.messages.map((m) => m.content).join('\n');
-  const last = body.messages[body.messages.length - 1].content;
+  const last = [...body.messages].reverse().find((m) => m.role === 'user').content;
   if (/group news articles/.test(sys)) {
     // Group by the story keyword embedded in the headline's first distinctive word.
     const lines = last.split('NEW ARTICLES:\n')[1].split('\n');
@@ -92,6 +99,14 @@ function mockLLM(body) {
       .filter((e) => e.articles.length);
     return JSON.stringify({ events });
   }
+  if (/turn a news topic into web news search queries/.test(sys)) {
+    const topic = (last.match(/Topic: (.*)/) || [])[1] || '';
+    return JSON.stringify({ queries: /iran/i.test(topic) ? ['Iran war', 'Iran strikes', 'Iran conflict oil'] : [topic] });
+  }
+  if (/deciding which articles belong/.test(sys)) {
+    const lines = last.split('ARTICLES:\n')[1].split('\n');
+    return JSON.stringify({ relevant: lines.map((l, i) => (/iran/i.test(l) && !/recipe/i.test(l) ? i : null)).filter((x) => x !== null) });
+  }
   if (/plan news research/.test(sys)) return JSON.stringify({ queries: ['storm elena landfall', 'elena power outages'], background: 'Tropical cyclone', questions: ['How many people lost power?', 'What is the forecast track?'] });
   if (/neutral news summaries/.test(sys)) return JSON.stringify({ title: 'Sample event summary', summary: 'A sample neutral summary of the event. (Fictional.)', category: 'World' });
   if (/research analyst/.test(sys))
@@ -106,11 +121,33 @@ http
     if ((m = u.pathname.match(/^\/feeds\/(\w+)\.xml$/))) return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(rss(m[1]));
     if ((m = u.pathname.match(/^\/img\/([\w-]+)\.svg$/))) return res.writeHead(200, { 'Content-Type': 'image/svg+xml' }).end(svg(m[1], Number(u.searchParams.get('h') || 200)));
     if ((m = u.pathname.match(/^\/article\/([\w-]+)$/))) return res.writeHead(200, { 'Content-Type': 'text/html' }).end(articlePage(m[1]));
+    // Fake web search engines. "Bing" returns real-looking wrapped links + thumbnails; GDELT rate-limits.
+    if (u.pathname === '/bing/news/search') {
+      const q = u.searchParams.get('q') || '';
+      const hits = SEARCH_DB.filter((h) => h.terms.some((t) => q.toLowerCase().includes(t)));
+      const items = hits
+        .map((h, i) => `<item><title>${h.title}</title><link>http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;url=${encodeURIComponent(`${base}/article/${h.id}`)}&amp;c=1</link>
+        <description>${h.title} — sample search result.</description><pubDate>${new Date(Date.now() - (i + 1) * 3600e3).toUTCString()}</pubDate>
+        <News:Source>${h.source}</News:Source><News:Image>${base}/img/${h.id}.svg?h=${h.hue}</News:Image></item>`)
+        .join('');
+      return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<?xml version="1.0"?><rss xmlns:News="https://www.bing.com/news/search?q=&amp;format=rss"><channel>${items}</channel></rss>`);
+    }
+    if (u.pathname === '/gnews/rss/search') {
+      const q = u.searchParams.get('q') || '';
+      const hits = SEARCH_DB.filter((h) => h.terms.some((t) => q.toLowerCase().includes(t))).slice(0, 2);
+      const items = hits.map((h) => `<item><title>${h.title} - ${h.source}</title><link>https://news.google.com/rss/articles/CBM${h.id}</link><pubDate>${new Date().toUTCString()}</pubDate><source url="https://example.org">${h.source}</source></item>`).join('');
+      return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<rss><channel>${items}</channel></rss>`);
+    }
+    if (u.pathname === '/gdelt/api/v2/doc/doc') return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Please limit requests to one every 5 seconds.');
     if (u.pathname === '/v1/models') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'deepseek/deepseek-v4.1-flash-1017' }] }));
     if (u.pathname === '/v1/chat/completions') {
       let raw = '';
       for await (const c of req) raw += c;
       const body = JSON.parse(raw);
+      // Behave like a "thinking" model: without reasoning turned off, JSON-mode answers come back empty.
+      if (body.response_format && body.reasoning?.enabled !== false && !body.stream) {
+        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content: '', reasoning: 'thinking…'.repeat(50) }, finish_reason: 'length' }] }));
+      }
       const content = mockLLM(body);
       if (body.stream) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });

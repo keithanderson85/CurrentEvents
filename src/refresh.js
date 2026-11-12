@@ -3,8 +3,10 @@ import { db, save, newId } from './store.js';
 import { fetchAllFeeds } from './feeds.js';
 import { cluster } from './cluster.js';
 import { fetchArticle, mapLimit } from './fetcher.js';
+import { matchNewArticlesToTopics } from './manual.js';
 
-const BATCH = 140; // articles per grouping call
+const BATCH = 60; // articles per grouping call (smaller batches keep the model's answer short and reliable)
+const MAX_GROUP_TRIES = 3; // stop re-sending articles that never match anything
 const POOL_HOURS = 48; // ungrouped articles are retried for this long
 const EVENT_ACTIVE_HOURS = 72; // events that can still receive new articles
 const EVENT_MAX_AGE_DAYS = 10; // events without notes/chat are dropped after this
@@ -35,9 +37,11 @@ async function doRefresh(log) {
   const { articles, report } = await fetchAllFeeds();
   status.lastReport = report;
   let added = 0;
+  const fresh = [];
   for (const a of articles) {
     if (!store.articles[a.id]) {
       store.articles[a.id] = { ...a, eventId: null, fetchedAt: new Date().toISOString() };
+      fresh.push(store.articles[a.id]);
       added++;
     } else if (!store.articles[a.id].image && a.image) {
       store.articles[a.id].image = a.image;
@@ -47,6 +51,7 @@ async function doRefresh(log) {
   log(`[refresh] ${articles.length} articles from ${report.filter((r) => r.ok).length}/${report.length} feeds, ${added} new`);
 
   await groupPending(log);
+  if (fresh.length) await matchNewArticlesToTopics(fresh, log).catch((e) => log('[topics] failed:', e.message));
   await fillMissingImages(log);
   prune();
   save();
@@ -58,7 +63,7 @@ export async function groupPending(log = console.log) {
   const store = db();
   const now = Date.now();
   const pool = Object.values(store.articles)
-    .filter((a) => !a.eventId && now - new Date(a.publishedAt).getTime() < POOL_HOURS * 3600e3)
+    .filter((a) => !a.eventId && (a.groupTries || 0) < MAX_GROUP_TRIES && now - new Date(a.publishedAt).getTime() < POOL_HOURS * 3600e3)
     .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
   if (pool.length < 1) return;
 
@@ -68,9 +73,11 @@ export async function groupPending(log = console.log) {
       .filter((e) => now - new Date(e.updatedAt).getTime() < EVENT_ACTIVE_HOURS * 3600e3)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, 80);
-    const { groups, method } = await cluster(batch, active, store.articles);
+    const { groups, method, error } = await cluster(batch, active, store.articles);
     status.method = method;
+    status.lastError = error || null;
     applyGroups(groups);
+    if (method === 'llm') for (const a of batch) if (!a.eventId) a.groupTries = (a.groupTries || 0) + 1;
     log(`[group] batch ${i / BATCH + 1}: ${groups.length} groups via ${method}`);
   }
 }
@@ -133,13 +140,14 @@ function prune() {
   const store = db();
   const now = Date.now();
   for (const [id, e] of Object.entries(store.events)) {
-    const hasUserData = e.notes?.length || e.chat?.length || e.research?.length || e.pinned;
+    const hasUserData = e.manual || e.notes?.length || e.chat?.length || e.research?.length || e.pinned;
     if (!hasUserData && now - new Date(e.updatedAt).getTime() > EVENT_MAX_AGE_DAYS * 864e5) {
-      for (const aid of e.articleIds) delete store.articles[aid];
-      delete store.events[id];
+      delete store.events[id]; // its articles are removed below once nothing references them
     }
   }
+  const referenced = new Set(Object.values(store.events).flatMap((e) => e.articleIds));
   for (const [id, a] of Object.entries(store.articles)) {
-    if ((!a.eventId || a.eventId === 'dismissed') && now - new Date(a.publishedAt).getTime() > config.articleMaxAgeHours * 3600e3) delete store.articles[id];
+    if (referenced.has(id)) continue;
+    if (now - new Date(a.publishedAt).getTime() > config.articleMaxAgeHours * 3600e3) delete store.articles[id];
   }
 }

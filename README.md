@@ -11,7 +11,7 @@ _Screenshots use fictional sample data and placeholder images from the offline t
 
 - **Automatic events.** Every 30 minutes (and on demand) it fetches ~19 RSS feeds and the AI groups articles about the same story into one event, with a neutral title, summary and category. New articles join existing events as stories develop.
 - **Patchwork titles.** Each event's title sits under a quilt of the different outlets' headline images.
-- **Make your own events.** "New event" takes a topic and/or a few article links, then (optionally) finds matching coverage in what's already been gathered and on the web.
+- **Make your own events.** "New event" takes a topic (e.g. "War in Iran") and/or a few article links. It searches Bing News, Google News and GDELT plus the articles already gathered, has the AI keep only the ones really about the topic, and writes a summary. With **Keep tracking** on, new matching articles are added on every refresh; **Find more coverage** searches again on demand. Links from sites that block automated readers are still added (as link-only).
 - **Coverage by lean.** Each event shows how its coverage splits across left / center / right outlets.
 - **Deep dive.** Searches for more reporting (GDELT news search, Google News, Wikipedia), prioritising AP, Reuters, AFP, BBC, NPR, PBS, DW and similar, reads the articles and writes a cited briefing: bottom line, what's confirmed, disputed claims, background, how coverage differs, open questions. You can give it a focus, or dig into one specific article.
 - **Notes & custom data.** Add labelled notes, pasted data or links (links are read automatically). Everything you add is used by chat and deep dives.
@@ -39,6 +39,7 @@ Your API key only lives in `.env`, which is git-ignored. Never commit it.
 | `OPENROUTER_API_KEY` | (none) | Your OpenRouter key. Without it the app still works: keyword grouping, sources-only deep dives, no chat. |
 | `OPENROUTER_MODEL` | `deepseek/deepseek-v4.1-flash-1017` | Model for grouping and summaries. |
 | `OPENROUTER_RESEARCH_MODEL` | same as above | Optional separate model for deep dives and chat. |
+| `OPENROUTER_REASONING` | `off` | Turns model "thinking" off (faster, avoids empty answers). `low`/`medium`/`high` to enable, `default` for the model's own setting. |
 | `PORT` | `3000` | Web server port. |
 | `REFRESH_MINUTES` | `30` | How often to fetch news (0 = startup and manual only). |
 | `ARTICLE_MAX_AGE_HOURS` | `72` | How long articles are kept for grouping. |
@@ -52,7 +53,7 @@ Front-page feeds (RSS, free, no keys), chosen to span the spectrum and include n
 
 BBC News, NPR, PBS NewsHour, Deutsche Welle, France 24, CBC, Al Jazeera, The Guardian, New York Times, ABC News, CBS News, CNBC, Wall Street Journal (world), The Hill, Sky News, Fox News, New York Post, Washington Examiner.
 
-Deep dives add **GDELT** (global news search that returns real article links), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
+Topic events and deep dives add **Bing News** and **GDELT** (news searches that return real article links and images), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
 
 ## How it works
 
@@ -62,7 +63,8 @@ src/feeds.js         Fetch & parse RSS/RDF/Atom feeds, pick headline images
 src/cluster.js       AI grouping into events (keyword fallback without a key)
 src/refresh.js       Fetch → group → fill missing images (og:image) → prune
 src/research.js      Deep dive: plan searches, search, read, write cited briefing
-src/manual.js        User-created events, adding articles by link
+src/manual.js        User-created topic events: search, AI relevance check, tracking
+src/search.js        Bing News / Google News / GDELT search, merged and de-duplicated
 src/chat.js          Event-grounded streaming chat
 src/store.js         JSON-file storage in ./data (git-ignored)
 public/              The web page (plain HTML/CSS/JS, no build step)

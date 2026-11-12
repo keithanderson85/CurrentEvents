@@ -1,57 +1,17 @@
-import { XMLParser } from 'fast-xml-parser';
 import { db, save, newId, hashId } from './store.js';
 import { chat, chatJSON, currentModel } from './llm.js';
 import { hasLLM } from './config.js';
 import { fetchText, fetchArticle, mapLimit, truncate } from './fetcher.js';
 import { domainInfo, domainOf, NEUTRAL_DOMAINS } from './sources.js';
+import { searchNews, searchGoogleNews } from './search.js';
 
 // "Deep dive": go beyond the articles we already have, prioritising wire services and
 // public broadcasters, then have the model write a neutral, cited briefing.
 //
 // Research sources (all free, no keys):
-//   - GDELT DOC 2.0 API: global news search that returns real article URLs.
+//   - Bing News + GDELT (see search.js): searches that return real article URLs.
 //   - Google News RSS search: headline-level corroboration across many outlets.
 //   - Wikipedia: background context.
-
-const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@', isArray: (n) => n === 'item' });
-
-export async function searchGdelt(query, { max = 40, timespan = '7d' } = {}) {
-  const q = encodeURIComponent(`${query} sourcelang:english`);
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${q}&mode=artlist&maxrecords=${max}&format=json&sort=hybridrel&timespan=${timespan}`;
-  const { text } = await fetchText(url, { timeout: 15000 });
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return []; // GDELT answers plain-text errors for odd queries
-  }
-  return (data.articles || []).map((a) => ({
-    title: a.title,
-    url: a.url,
-    domain: (a.domain || domainOf(a.url)).replace(/^www\./, ''),
-    image: a.socialimage || null,
-    date: a.seendate,
-    via: 'gdelt',
-  }));
-}
-
-export async function searchGoogleNews(query) {
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query + ' when:7d')}&hl=en-US&gl=US&ceid=US:en`;
-  const { text } = await fetchText(url, { timeout: 12000 });
-  const items = xml.parse(text)?.rss?.channel?.item || [];
-  return items.slice(0, 30).map((it) => {
-    const src = it.source || {};
-    const srcUrl = typeof src === 'object' ? src['@url'] : '';
-    return {
-      title: String(it.title || '').replace(/\s+-\s+[^-]+$/, ''),
-      url: it.link,
-      domain: domainOf(srcUrl || ''),
-      sourceName: typeof src === 'object' ? src['#text'] : String(src),
-      date: it.pubDate,
-      via: 'googlenews',
-    };
-  });
-}
 
 export async function searchWikipedia(query) {
   const api = 'https://en.wikipedia.org/w/api.php';
@@ -148,15 +108,18 @@ async function deepDive(event, report, { focus, articleId }) {
 
   step(`Searching news archives for: ${plan.queries.join(' · ')}`);
   const neutralSites = ['apnews.com', 'reuters.com', 'bbc.com', 'npr.org', 'pbs.org'];
-  const searches = await Promise.allSettled([
-    ...plan.queries.map((q) => searchGdelt(q)),
+  const [news, neutralNews, wiki] = await Promise.allSettled([
+    searchNews(plan.queries),
     searchGoogleNews(`${plan.queries[0]} (${neutralSites.map((s) => 'site:' + s).join(' OR ')})`),
-    searchGoogleNews(plan.queries[0]),
     searchWikipedia(plan.background),
   ]);
-  const found = searches.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
-  const failures = searches.filter((s) => s.status === 'rejected').length;
-  if (failures) step(`${failures} search source(s) did not respond; continuing with the rest.`);
+  const found = [
+    ...(news.status === 'fulfilled' ? news.value.results : []),
+    ...(neutralNews.status === 'fulfilled' ? neutralNews.value : []),
+    ...(wiki.status === 'fulfilled' ? wiki.value : []),
+  ];
+  const failed = [...(news.status === 'fulfilled' ? news.value.errors : ['news search']), ...(neutralNews.status === 'rejected' ? ['Google News'] : []), ...(wiki.status === 'rejected' ? ['Wikipedia'] : [])];
+  if (failed.length) step(`${failed.length} search request(s) did not respond; continuing with the rest.`);
 
   // Candidate pages to read in full. Event's own articles first (so we can compare framing),
   // then new pages from neutral outlets, then a few others for breadth.
@@ -166,7 +129,7 @@ async function deepDive(event, report, { focus, articleId }) {
     6
   ).map((a) => ({ title: a.title, url: a.url, domain: domainOf(a.url), via: 'event', fallbackText: a.text || a.summary, name: a.source, lean: a.lean }));
 
-  const external = found.filter((f) => f.via === 'gdelt' && f.url && !seen.has(f.url) && (seen.add(f.url), true));
+  const external = found.filter((f) => (f.via === 'gdelt' || f.via === 'bing') && f.url && !seen.has(f.url) && (seen.add(f.url), true));
   const neutralExternal = external.filter((f) => domainInfo(f.domain).neutral);
   const otherExternal = external.filter((f) => !domainInfo(f.domain).neutral);
   const perDomain = new Map();
@@ -300,7 +263,14 @@ function pickDiverse(articles, n) {
 
 // Turn a URL into an article record (used for user-added links and manual events).
 export async function articleFromUrl(url, eventId = null) {
-  const page = await fetchArticle(url, { timeout: 12000 });
+  let page;
+  try {
+    page = await fetchArticle(url, { timeout: 12000 });
+  } catch (e) {
+    // Many outlets block automated readers (403, paywalls, bot checks). Keep the link anyway,
+    // using a title made from the URL, so it still shows up in the event.
+    page = { url, title: titleFromUrl(url), description: '', text: '', image: null, published: '', readError: e.message };
+  }
   const info = domainInfo(page.url || url);
   return {
     id: hashId((page.url || url).replace(/[?#].*$/, '')),
@@ -316,7 +286,23 @@ export async function articleFromUrl(url, eventId = null) {
     fetchedAt: new Date().toISOString(),
     eventId,
     manual: true,
+    ...(page.readError ? { unreadable: true } : {}),
   };
+}
+
+function titleFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const slug = u.pathname.split('/').filter(Boolean).reverse().find((p) => /[a-z]-[a-z]/i.test(p)) || '';
+    const words = slug.replace(/\.[a-z]+$/i, '').replace(/-(?=[a-z]*\d)[a-z0-9]{6,}$/i, '').split(/[-_]+/).filter((w) => w && !/^\d+$/.test(w));
+    if (words.length >= 3) {
+      const t = words.join(' ');
+      return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    return `Article from ${u.hostname.replace(/^www\./, '')}`;
+  } catch {
+    return url;
+  }
 }
 
 function safeDate(s) {

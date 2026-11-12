@@ -66,6 +66,7 @@ const icons = {
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   dive: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
   layers: '<svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>',
 };
 
@@ -369,8 +370,10 @@ function startEventPolling() {
     await loadEvent(ev.id).catch(() => {});
     paintHero();
     paintTabs();
+    // Don't wipe out something the user is in the middle of typing.
     const active = document.activeElement;
-    if (!$('#tabBody').contains(active) || active === document.body) paintTab();
+    const typing = active && /INPUT|TEXTAREA/.test(active.tagName) && active.value && $('#tabBody').contains(active);
+    if (!typing) paintTab();
   }, 2000);
 }
 
@@ -385,12 +388,12 @@ function paintHero() {
     ev.building ? `<span class="dot"></span><span style="color:var(--accent)">Gathering articles…</span>` : ''
   }</div>
       <h1 class="hero-title" id="heroTitle">${esc(ev.title)}</h1>
-      ${ev.summary ? `<p class="hero-summary">${esc(ev.summary)}</p>` : ''}
+      ${ev.summary ? `<p class="hero-summary">${esc(ev.summary)}</p>` : ev.description ? `<p class="hero-summary">${esc(ev.description)}</p>` : ''}
       <div class="hero-actions">
         <button class="btn accent" data-act="dive">${icons.dive} Deep dive</button>
         <button class="btn" data-act="pin">${icons.pin} ${ev.pinned ? 'Unpin' : 'Pin'}</button>
         <button class="btn" data-act="rename">${icons.edit} Rename</button>
-        ${state.status?.llm ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
+        ${state.status?.llm && ev.articleCount ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
         <button class="btn ghost danger" data-act="delete">${icons.trash} Remove</button>
       </div>
     </div>`;
@@ -484,34 +487,45 @@ function coverageHTML() {
   for (const a of ev.articles) counts[a.lean || 'unknown'] = (counts[a.lean || 'unknown'] || 0) + 1;
   const order = [...LEANS, 'unknown'].filter((l) => counts[l]);
   const total = ev.articles.length || 1;
-  const errors = ev.buildErrors?.length
-    ? `<details class="more"><summary>${ev.buildErrors.length} link(s) couldn't be read</summary><ul class="muted" style="font-size:13px">${ev.buildErrors
-        .map((x) => `<li>${esc(x)}</li>`)
-        .join('')}</ul></details>`
+  const notes = ev.buildErrors?.length && !ev.building
+    ? `<div class="notice">${icons.info}<div>${ev.buildErrors.map((x) => `<div>${esc(x)}</div>`).join('')}</div></div>`
     : '';
-  return `
-    <div class="panel">
+  const finding = `<div class="finding"><span class="live busy"></span><div><b>Looking for coverage…</b><div class="muted">Searching Bing News, Google News and GDELT, plus the articles already gathered. This can take up to a minute.</div></div></div>`;
+  const empty = `<div class="empty-mini">
+      <div class="empty-mini-art" aria-hidden="true"><i></i><i></i><i></i></div>
+      <b>No articles yet</b>
+      <span class="muted">Search the web for coverage, or paste a link below.</span>
+      <button class="btn accent" data-find>${icons.search} Find coverage</button>
+    </div>`;
+  const spectrum = ev.articles.length
+    ? `<div class="panel">
       <p class="section-label">Coverage by outlet lean</p>
       <div class="coverage">${order.map((l) => `<span class="${l}" style="flex:${counts[l]}" title="${leanLabel(l)}: ${counts[l]}"></span>`).join('')}</div>
       <div class="coverage-legend">${order
         .map((l) => `<span class="lean ${l}">${leanLabel(l)} · ${Math.round((counts[l] / total) * 100)}%</span>`)
         .join('')}</div>
       <p class="muted" style="font-size:12px;margin:10px 0 0">Lean ratings are approximate, based on public media-bias ratings.</p>
-    </div>
+    </div>`
+    : '';
+  const track = ev.manual
+    ? `<label class="switch" title="Add matching articles automatically on every refresh"><input type="checkbox" data-track ${ev.track ? 'checked' : ''}><span class="slider"></span><span>Keep tracking</span></label>`
+    : '';
+  return `
+    ${spectrum}
     <div class="panel">
-      <p class="section-label">Articles</p>
+      <div class="panel-head">
+        <p class="section-label" style="margin:0">Articles${ev.articles.length ? ` · ${ev.articles.length}` : ''}</p>
+        <div class="panel-tools">${track}${ev.articles.length && !ev.building ? `<button class="btn sm" data-find>${icons.search} Find more coverage</button>` : ''}</div>
+      </div>
+      ${notes}
+      ${ev.building ? finding : ''}
       <div class="article-list">
-        ${
-          ev.articles.length
-            ? ev.articles.map(articleHTML).join('')
-            : `<p class="muted">${ev.building ? 'Finding articles…' : 'No articles yet. Add a link below.'}</p>`
-        }
+        ${ev.articles.length ? ev.articles.map(articleHTML).join('') : ev.building ? '' : empty}
       </div>
       <form class="inline-form" id="addArticle">
-        <input class="input" name="url" type="url" placeholder="Add an article by link (https://…)" required />
-        <button class="btn" type="submit">Add</button>
+        <input class="input" name="url" type="url" placeholder="Paste an article link (https://…)" required />
+        <button class="btn" type="submit">Add article</button>
       </form>
-      ${errors}
     </div>`;
 }
 
@@ -523,7 +537,7 @@ function articleHTML(a) {
         : ''
     }</div>
     <div>
-      <div class="meta"><b>${esc(a.source)}</b><span class="lean ${esc(a.lean || 'unknown')}">${leanLabel(a.lean)}</span><span>${timeAgo(a.publishedAt)}</span></div>
+      <div class="meta"><b>${esc(a.source)}</b><span class="lean ${esc(a.lean || 'unknown')}">${leanLabel(a.lean)}</span><span>${timeAgo(a.publishedAt)}</span>${a.unreadable ? `<span title="This site blocks automated readers, so only the link was saved">link only</span>` : ''}</div>
       <h4><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a></h4>
       ${a.summary ? `<p>${esc(a.summary)}</p>` : ''}
     </div>
@@ -629,7 +643,13 @@ function bindTab() {
     const t = e.target.closest('button, a.cite');
     if (!t) return;
     try {
-      if (t.dataset.dig) {
+      if (t.hasAttribute('data-find')) {
+        Object.assign(ev, await api(`/api/events/${ev.id}/find`, { method: 'POST' }));
+        ev.building = true;
+        paintHero();
+        paintTab();
+        startEventPolling();
+      } else if (t.dataset.dig) {
         await startDive({ articleId: t.dataset.dig });
       } else if (t.dataset.removeArticle) {
         await api(`/api/events/${ev.id}/articles/${t.dataset.removeArticle}`, { method: 'DELETE' });
@@ -679,23 +699,31 @@ function bindTab() {
       toast(err.message);
     }
   };
+  body.querySelector('[data-track]')?.addEventListener('change', async (e) => {
+    try {
+      Object.assign(ev, await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { track: e.target.checked } }));
+      toast(ev.track ? 'New matching articles will be added automatically' : 'Stopped tracking new articles');
+    } catch (err) {
+      toast(err.message);
+    }
+  });
   $('#addArticle')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const btn = f.querySelector('button');
     btn.disabled = true;
-    btn.textContent = 'Reading…';
+    btn.textContent = state.status?.llm ? 'Reading & summarizing…' : 'Reading…';
     try {
-      await api(`/api/events/${ev.id}/articles`, { method: 'POST', body: { url: f.url.value } });
+      const added = await api(`/api/events/${ev.id}/articles`, { method: 'POST', body: { url: f.url.value } });
       await loadEvent(ev.id);
       paintHero();
       paintTabs();
       paintTab();
-      toast('Article added');
+      toast(added.unreadable ? 'Added. That site blocks automated readers, so only the link was saved.' : 'Article added and summary updated');
     } catch (err) {
       toast(err.message);
       btn.disabled = false;
-      btn.textContent = 'Add';
+      btn.textContent = 'Add article';
     }
   });
   $('#diveForm')?.addEventListener('submit', (e) => {

@@ -5,7 +5,7 @@ import { load, db, save, flush, newId } from './src/store.js';
 import { refresh, status as refreshStatus } from './src/refresh.js';
 import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
-import { createManualEvent, addArticleToEvent, summarize } from './src/manual.js';
+import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
 import { FEEDS } from './src/sources.js';
@@ -47,6 +47,9 @@ function eventSummary(ev) {
     summary: ev.summary,
     category: ev.category,
     manual: Boolean(ev.manual),
+    track: ev.manual ? ev.track !== false : false,
+    description: ev.description || '',
+    lastFoundAt: ev.lastFoundAt || null,
     pinned: Boolean(ev.pinned),
     building: Boolean(ev.building),
     articleCount: arts.length,
@@ -129,7 +132,8 @@ app.get('/api/events/:id', (req, res) => {
 app.patch('/api/events/:id', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
-  const { title, summary, category, pinned } = req.body || {};
+  const { title, summary, category, pinned, track } = req.body || {};
+  if (typeof track === 'boolean') ev.track = track;
   if (typeof title === 'string' && title.trim()) {
     ev.title = title.trim();
     ev.titleLocked = true; // don't let auto-grouping rename it
@@ -145,7 +149,7 @@ app.delete('/api/events/:id', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
   const store = db();
-  for (const id of ev.articleIds) if (store.articles[id]) store.articles[id].eventId = 'dismissed';
+  for (const id of ev.articleIds) if (store.articles[id]?.eventId === ev.id) store.articles[id].eventId = 'dismissed';
   delete store.events[ev.id];
   save();
   res.json({ ok: true });
@@ -163,6 +167,14 @@ app.post(
   })
 );
 
+// Search the web + gathered articles for more coverage (runs in the background).
+app.post('/api/events/:id/find', (req, res) => {
+  const ev = getEvent(req, res);
+  if (!ev) return;
+  if (!startFindCoverage(ev)) return res.status(409).json({ error: 'Already searching for coverage.' });
+  res.json(eventSummary(ev));
+});
+
 // Articles
 app.post(
   '/api/events/:id/articles',
@@ -179,7 +191,7 @@ app.delete('/api/events/:id/articles/:aid', (req, res) => {
   if (!ev) return;
   ev.articleIds = ev.articleIds.filter((x) => x !== req.params.aid);
   const a = db().articles[req.params.aid];
-  if (a) a.eventId = 'dismissed'; // keep it from being re-grouped here
+  if (a && a.eventId === ev.id) a.eventId = 'dismissed'; // keep it from being re-grouped here
   save();
   res.json({ ok: true });
 });

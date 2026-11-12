@@ -16,6 +16,8 @@ export const config = {
     model: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-v4.1-flash-1017',
     // Optional: a different (e.g. stronger) model for deep dives and chat. Defaults to the main model.
     researchModel: process.env.OPENROUTER_RESEARCH_MODEL || '',
+    // off | low | medium | high | default  (see llm.js)
+    reasoning: process.env.OPENROUTER_REASONING || 'off',
   },
   refreshMinutes: num(process.env.REFRESH_MINUTES, 30),
   // How far back articles are kept / considered for grouping.

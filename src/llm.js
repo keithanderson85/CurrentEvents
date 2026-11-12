@@ -20,14 +20,20 @@ function headers() {
   };
 }
 
-export async function chat(messages, { model, temperature = 0.3, maxTokens = 4000, json = false, signal } = {}) {
-  const body = {
-    model: model || currentModel(),
-    messages,
-    temperature,
-    max_tokens: maxTokens,
-  };
+// Reasoning ("thinking") models can spend the whole token budget thinking and return an empty
+// answer. For this app's short structured tasks thinking isn't needed, so it's off by default.
+// OPENROUTER_REASONING: off | low | medium | high
+function reasoningParam() {
+  const r = (config.openrouter.reasoning || 'off').toLowerCase();
+  if (r === 'default' || r === '') return undefined;
+  if (r === 'off' || r === 'none' || r === 'false') return { enabled: false };
+  return { effort: r };
+}
+
+async function complete(messages, { model, temperature = 0.3, maxTokens = 4000, json = false, signal, reasoning = reasoningParam() } = {}) {
+  const body = { model: model || currentModel(), messages, temperature, max_tokens: maxTokens };
   if (json) body.response_format = { type: 'json_object' };
+  if (reasoning) body.reasoning = reasoning;
   const res = await fetch(`${config.openrouter.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: headers(),
@@ -36,21 +42,60 @@ export async function chat(messages, { model, temperature = 0.3, maxTokens = 400
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    // Some models reject response_format; retry once without it.
-    if (json && res.status === 400 && /response_format|json/i.test(text)) {
-      return chat(messages, { model, temperature, maxTokens, json: false, signal });
+    // Some models reject response_format or the reasoning switch; retry once without them.
+    if (res.status === 400 && reasoning && /reason|think/i.test(text)) {
+      return complete(messages, { model, temperature, maxTokens, json, signal, reasoning: null });
+    }
+    if (res.status === 400 && json && /response_format|json/i.test(text)) {
+      return complete(messages, { model, temperature, maxTokens, json: false, signal, reasoning });
     }
     throw new Error(`OpenRouter ${res.status}: ${text.slice(0, 400)}`);
   }
   const data = await res.json();
   if (data.error) throw new Error(`OpenRouter error: ${data.error.message || JSON.stringify(data.error)}`);
-  return data.choices?.[0]?.message?.content ?? '';
+  const choice = data.choices?.[0] || {};
+  return {
+    content: choice.message?.content ?? '',
+    finish: choice.finish_reason || choice.native_finish_reason || '',
+    reasoningChars: (choice.message?.reasoning || '').length,
+  };
 }
 
-// Ask for JSON and parse it robustly (models sometimes wrap JSON in prose or code fences).
+export async function chat(messages, opts = {}) {
+  const r = await complete(messages, opts);
+  if (!r.content.trim()) {
+    // Retry once with more room (the usual cause is a model "thinking" until it hits the limit).
+    const r2 = await complete(messages, { ...opts, maxTokens: Math.round((opts.maxTokens || 4000) * 2) });
+    if (!r2.content.trim()) throw new Error(emptyMsg(r2));
+    return r2.content;
+  }
+  return r.content;
+}
+
+const emptyMsg = (r) =>
+  `Empty model response (finish: ${r.finish || 'unknown'}${r.reasoningChars ? `, ${r.reasoningChars} chars of hidden reasoning` : ''}). Try another model in Settings, or set OPENROUTER_REASONING=off.`;
+
+// Ask for JSON and parse it robustly (models sometimes wrap JSON in prose or code fences, or get cut off).
 export async function chatJSON(messages, opts = {}) {
-  const raw = await chat(messages, { ...opts, json: true });
-  return parseJSONLoose(raw);
+  const maxTokens = opts.maxTokens || 4000;
+  let first;
+  try {
+    first = await complete(messages, { ...opts, json: true, maxTokens });
+    if (first.content.trim()) return parseJSONLoose(first.content);
+  } catch (e) {
+    if (/^OpenRouter (4|5)\d\d/.test(e.message) && !/400/.test(e.message)) throw e;
+  }
+  // Second try: no JSON mode, more tokens, and an explicit reminder.
+  const retry = await complete(
+    [...messages, { role: 'system', content: 'Reply with only the JSON object, no prose and no code fences. Keep it compact.' }],
+    { ...opts, json: false, maxTokens: Math.round(maxTokens * 1.75) }
+  );
+  if (!retry.content.trim()) throw new Error(emptyMsg(retry));
+  try {
+    return parseJSONLoose(retry.content);
+  } catch (e) {
+    throw new Error(`${e.message}${retry.finish === 'length' ? ' (answer was cut off: too long)' : ''}`);
+  }
 }
 
 export function parseJSONLoose(raw) {
@@ -68,13 +113,20 @@ export function parseJSONLoose(raw) {
 
 // Streams tokens; calls onToken(text) for each delta. Resolves with the full text.
 export async function chatStream(messages, { model, temperature = 0.4, maxTokens = 2000, onToken, signal } = {}) {
-  const res = await fetch(`${config.openrouter.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: headers(),
-    body: JSON.stringify({ model: model || currentModel(), messages, temperature, max_tokens: maxTokens, stream: true }),
-    signal,
-  });
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text().catch(() => '')).slice(0, 400)}`);
+  const send = (reasoning) =>
+    fetch(`${config.openrouter.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ model: model || currentModel(), messages, temperature, max_tokens: maxTokens, stream: true, ...(reasoning ? { reasoning } : {}) }),
+      signal,
+    });
+  let res = await send(reasoningParam());
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    if (res.status === 400 && reasoningParam() && /reason|think/i.test(text)) res = await send(null);
+    else throw new Error(`OpenRouter ${res.status}: ${text.slice(0, 400)}`);
+    if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text().catch(() => '')).slice(0, 400)}`);
+  }
   const decoder = new TextDecoder();
   let buf = '';
   let full = '';
