@@ -969,6 +969,36 @@ async function settingsModal() {
 
 $('#today').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 $('#newEventBtn').addEventListener('click', newEventModal);
+
+// Theme: system / light / dark, remembered in this browser.
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'light' || mode === 'dark') root.dataset.theme = mode;
+  else delete root.dataset.theme;
+  try {
+    localStorage.setItem('theme', mode);
+  } catch {}
+  $$('#themeSwitch [data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === mode)));
+  const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  $('meta[name=theme-color]')?.setAttribute('content', dark ? '#12110f' : '#f6f3ee');
+}
+let savedTheme = 'system';
+try {
+  savedTheme = localStorage.getItem('theme') || 'system';
+} catch {}
+applyTheme(savedTheme);
+$('#themeSwitch').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-theme-set]');
+  if (!b) return;
+  // Pressing the current mode cycles to the next one (this is how the compact phone version works).
+  const order = ['system', 'light', 'dark'];
+  const mode = b.getAttribute('aria-pressed') === 'true' ? order[(order.indexOf(b.dataset.themeSet) + 1) % 3] : b.dataset.themeSet;
+  applyTheme(mode);
+  toast(`Theme: ${mode === 'system' ? 'match system' : mode}`);
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (!document.documentElement.dataset.theme) applyTheme('system');
+});
 $('#settingsBtn').addEventListener('click', () => settingsModal().catch((e) => toast(e.message)));
 $('#refreshBtn').addEventListener('click', async () => {
   const b = $('#refreshBtn');
