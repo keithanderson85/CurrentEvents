@@ -65,6 +65,7 @@ const icons = {
   ext: '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   dive: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
   info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
   layers: '<svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>',
@@ -241,23 +242,27 @@ function checkHTML(ev) {
     return `<div class="check check-empty"><span class="muted">No reality check yet. It runs automatically on stories with two or more articles.</span><button class="btn sm" data-act="check">${icons.sparkle} Check now</button></div>`;
   }
   const li = (arr) => arr.map((x) => `<li>${esc(x)}</li>`).join('');
-  return `<div class="check">
-    <div class="check-head">
+  let open = false;
+  try {
+    open = localStorage.getItem('checkOpen') === '1';
+  } catch {}
+  return `<details class="check" id="checkBox" ${open ? 'open' : ''}>
+    <summary class="check-head">
       <span class="check-label">Reality check</span>${verdictChip(c.verdict)}
       <span class="check-why">${esc(c.why)}</span>
-      <button class="btn sm ghost" data-act="check" title="Check again">${icons.refresh || icons.sparkle}</button>
-    </div>
+      <span class="check-chev" aria-hidden="true">${icons.chevron || '▾'}</span>
+    </summary>
+    <div class="check-body">
     ${c.plain ? `<p class="check-plain"><b>In plain words:</b> ${esc(c.plain)}</p>` : ''}
-    <details class="check-more" ${matchMedia('(max-width: 720px)').matches ? '' : 'open'}><summary>What's solid, what's claimed and the spin</summary>
     <div class="check-cols">
       ${c.confirmed.length ? `<div><h4 class="ok">What's solid</h4><ul>${li(c.confirmed)}</ul></div>` : ''}
       ${c.unverified.length ? `<div><h4 class="warn">Claimed, not proven</h4><ul>${li(c.unverified)}</ul></div>` : ''}
     </div>
     ${c.spin.length ? `<div class="check-spin"><h4>The spin</h4>${c.spin.map((s) => `<p><span class="side">${esc(s.side)}</span>${esc(s.framing)}</p>`).join('')}</div>` : ''}
     ${c.missing ? `<p class="check-missing"><b>What's missing:</b> ${esc(c.missing)}</p>` : ''}
-    </details>
-    <div class="check-foot">Based on ${c.articleCount} article${c.articleCount === 1 ? '' : 's'} from ${c.sources} outlet${c.sources === 1 ? '' : 's'} · ${timeAgo(c.at)} · AI-written, so treat it as a starting point. Run a Deep dive to check claims against research and official records.</div>
-  </div>`;
+    <div class="check-foot"><span>Based on ${c.articleCount} article${c.articleCount === 1 ? '' : 's'} from ${c.sources} outlet${c.sources === 1 ? '' : 's'} · ${timeAgo(c.at)} · AI-written, so treat it as a starting point.</span><button class="btn sm ghost" data-act="check">${icons.refresh} Check again</button></div>
+    </div>
+  </details>`;
 }
 
 function cardHTML(e, i, featured) {
@@ -437,6 +442,7 @@ function paintHero() {
   }</div>
       <h1 class="hero-title" id="heroTitle">${esc(ev.title)}</h1>
       ${ev.summary ? `<p class="hero-summary">${esc(ev.summary)}</p>` : ev.description ? `<p class="hero-summary">${esc(ev.description)}</p>` : ''}
+      ${checkHTML(ev)}
       <div class="hero-actions">
         <button class="btn accent desktop-only" data-act="dive">${icons.dive} Deep dive</button>
         <button class="btn" data-act="pin">${icons.pin} ${ev.pinned ? 'Unpin' : 'Pin'}</button>
@@ -444,9 +450,13 @@ function paintHero() {
         ${state.status?.llm && ev.articleCount ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
         <button class="btn ghost danger" data-act="delete">${icons.trash} Remove</button>
       </div>
-      ${checkHTML(ev)}
     </div>`;
   $('#hero').onclick = heroAction;
+  $('#checkBox')?.addEventListener('toggle', (e) => {
+    try {
+      localStorage.setItem('checkOpen', e.target.open ? '1' : '0');
+    } catch {}
+  });
 }
 
 function openDive() {
