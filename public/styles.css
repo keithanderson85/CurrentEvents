@@ -408,9 +408,21 @@ details.more summary { cursor: pointer; font-size: 13px; color: var(--muted); fo
 .banner { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 12px; background: var(--accent-soft); color: var(--ink); font-size: 14px; margin-bottom: 18px; }
 
 /* ---------- Responsive ---------- */
+/* Grid/flex children must be allowed to shrink, or long content pushes the page sideways. */
+.layout > *, .article > *, .source > *, .card-body, .hero-text { min-width: 0; }
+.chat-head-tools { display: flex; gap: 6px; align-items: center; }
+.mobile-only { display: none !important; }
+h4, .card-title, .hero-title, .prose, .note-text { overflow-wrap: anywhere; }
+.prose pre, .prose code { white-space: pre-wrap; word-break: break-word; }
+
 @media (max-width: 1080px) {
-  .layout { grid-template-columns: 1fr; }
-  .chat { position: static; height: 560px; }
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+  /* Phone/tablet order: summary (hero) → ask & deep dive → sources */
+  .chat { order: -1; position: static; height: auto; min-height: 0; }
+  .chat-log { max-height: 55vh; min-height: 0; padding: 12px 14px; }
+  .chat-empty { margin: 0; }
+  .mobile-only { display: inline-flex !important; }
+  .desktop-only { display: none !important; }
 }
 @media (max-width: 720px) {
   .topbar-inner { padding: 10px 16px; gap: 10px; flex-wrap: wrap; }
@@ -426,7 +438,16 @@ details.more summary { cursor: pointer; font-size: 13px; color: var(--muted); fo
   .card.featured .patchwork { height: 190px; }
   .card.featured .card-title { font-size: 22px; }
   .grid { grid-template-columns: 1fr; }
-  .article { grid-template-columns: 72px minmax(0, 1fr); }
+  .article { grid-template-columns: 72px minmax(0, 1fr); gap: 12px; }
+  .panel { padding: 16px; }
+  .hero-actions .btn { padding: 7px 12px; font-size: 13px; }
+  .inline-form { flex-direction: column; }
+  .dive-start .row { flex-direction: column; }
+  .source { grid-template-columns: 24px minmax(0, 1fr); }
+  .source .tags { grid-column: 2; }
+  .chat-head { padding: 12px 14px; }
+  .chat-head .sub { display: none; }
+  .tab { padding: 10px 10px; }
   .article .thumb { width: 72px; height: 54px; }
   .article .row-actions { grid-column: 2; opacity: 1; }
   .hero-text { padding: 18px; }
@@ -471,4 +492,9 @@ details.more summary { cursor: pointer; font-size: 13px; color: var(--muted); fo
   .brand-logo { height: 34px; }
   .top-actions { gap: 2px; }
   .top-actions .btn { padding: 8px; }
+}
+@media (max-width: 720px) {
+  .tab svg { display: none; }
+  .tabs { gap: 0; }
+  .tab { flex: 1; justify-content: center; padding: 10px 6px; font-size: 14px; }
 }

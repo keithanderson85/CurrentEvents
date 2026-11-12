@@ -390,7 +390,7 @@ function paintHero() {
       <h1 class="hero-title" id="heroTitle">${esc(ev.title)}</h1>
       ${ev.summary ? `<p class="hero-summary">${esc(ev.summary)}</p>` : ev.description ? `<p class="hero-summary">${esc(ev.description)}</p>` : ''}
       <div class="hero-actions">
-        <button class="btn accent" data-act="dive">${icons.dive} Deep dive</button>
+        <button class="btn accent desktop-only" data-act="dive">${icons.dive} Deep dive</button>
         <button class="btn" data-act="pin">${icons.pin} ${ev.pinned ? 'Unpin' : 'Pin'}</button>
         <button class="btn" data-act="rename">${icons.edit} Rename</button>
         ${state.status?.llm && ev.articleCount ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
@@ -400,6 +400,14 @@ function paintHero() {
   $('#hero').onclick = heroAction;
 }
 
+function openDive() {
+  state.tab = 'dive';
+  paintTabs();
+  paintTab();
+  $('#tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(() => $('#diveFocus')?.focus({ preventScroll: true }), 400);
+}
+
 async function heroAction(e) {
   const b = e.target.closest('[data-act]');
   if (!b) return;
@@ -407,11 +415,7 @@ async function heroAction(e) {
   const act = b.dataset.act;
   try {
     if (act === 'dive') {
-      state.tab = 'dive';
-      paintTabs();
-      paintTab();
-      $('#tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      $('#diveFocus')?.focus();
+      openDive();
     } else if (act === 'pin') {
       Object.assign(ev, await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { pinned: !ev.pinned } }));
       paintHero();
@@ -774,7 +778,10 @@ function paintChat() {
   $('#chat').innerHTML = `
     <div class="chat-head">
       <div><h3>Ask about this event</h3><div class="sub">Uses the articles, your notes and deep dives</div></div>
-      ${ev.chat.length ? `<button class="btn sm ghost" id="clearChat" title="Clear conversation">${icons.trash}</button>` : ''}
+      <div class="chat-head-tools">
+        <button class="btn sm accent mobile-only" id="chatDive">${icons.dive} Deep dive</button>
+        ${ev.chat.length ? `<button class="btn sm ghost" id="clearChat" title="Clear conversation">${icons.trash}</button>` : ''}
+      </div>
     </div>
     <div class="chat-log" id="chatLog">${chatLogHTML()}</div>
     ${
@@ -788,6 +795,7 @@ function paintChat() {
     const s = e.target.closest('[data-suggest]');
     if (s && llm) sendChat(s.textContent);
   };
+  $('#chatDive')?.addEventListener('click', openDive);
   $('#clearChat')?.addEventListener('click', async () => {
     await api(`/api/events/${ev.id}/chat`, { method: 'DELETE' });
     ev.chat = [];
