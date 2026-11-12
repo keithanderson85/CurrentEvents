@@ -221,12 +221,51 @@ function statusLine() {
   }${r.method === 'heuristic' && state.status?.llm ? ' · AI grouping unavailable, used keywords' : ''}</span>`;
 }
 
+const VERDICT = {
+  confirmed: { label: 'Confirmed', tip: 'Core facts agreed by several independent outlets or official records' },
+  developing: { label: 'Developing', tip: 'Real, but key details are still changing' },
+  disputed: { label: 'Disputed', tip: 'The sides give conflicting accounts of the facts' },
+  unverified: { label: 'Unverified', tip: 'Rests on one outlet, one side or unnamed sources' },
+  misleading: { label: 'Misleading', tip: 'The headline claim is contradicted by the evidence' },
+};
+function verdictChip(v) {
+  const d = VERDICT[v];
+  return d ? `<span class="verdict v-${v}" title="${esc(d.tip)}">${d.label}</span>` : '';
+}
+
+function checkHTML(ev) {
+  const c = ev.check;
+  const llm = state.status?.llm;
+  if (!c) {
+    if (!llm || !ev.articleCount) return '';
+    return `<div class="check check-empty"><span class="muted">No reality check yet. It runs automatically on stories with two or more articles.</span><button class="btn sm" data-act="check">${icons.sparkle} Check now</button></div>`;
+  }
+  const li = (arr) => arr.map((x) => `<li>${esc(x)}</li>`).join('');
+  return `<div class="check">
+    <div class="check-head">
+      <span class="check-label">Reality check</span>${verdictChip(c.verdict)}
+      <span class="check-why">${esc(c.why)}</span>
+      <button class="btn sm ghost" data-act="check" title="Check again">${icons.refresh || icons.sparkle}</button>
+    </div>
+    ${c.plain ? `<p class="check-plain"><b>In plain words:</b> ${esc(c.plain)}</p>` : ''}
+    <details class="check-more" ${matchMedia('(max-width: 720px)').matches ? '' : 'open'}><summary>What's solid, what's claimed and the spin</summary>
+    <div class="check-cols">
+      ${c.confirmed.length ? `<div><h4 class="ok">What's solid</h4><ul>${li(c.confirmed)}</ul></div>` : ''}
+      ${c.unverified.length ? `<div><h4 class="warn">Claimed, not proven</h4><ul>${li(c.unverified)}</ul></div>` : ''}
+    </div>
+    ${c.spin.length ? `<div class="check-spin"><h4>The spin</h4>${c.spin.map((s) => `<p><span class="side">${esc(s.side)}</span>${esc(s.framing)}</p>`).join('')}</div>` : ''}
+    ${c.missing ? `<p class="check-missing"><b>What's missing:</b> ${esc(c.missing)}</p>` : ''}
+    </details>
+    <div class="check-foot">Based on ${c.articleCount} article${c.articleCount === 1 ? '' : 's'} from ${c.sources} outlet${c.sources === 1 ? '' : 's'} · ${timeAgo(c.at)} · AI-written, so treat it as a starting point. Run a Deep dive to check claims against research and official records.</div>
+  </div>`;
+}
+
 function cardHTML(e, i, featured) {
   return `<a class="card ${featured ? 'featured' : ''}" href="#/event/${e.id}" style="animation-delay:${Math.min(i, 12) * 30}ms">
     ${e.pinned ? `<span class="pin-flag">Pinned</span>` : ''}
     ${patchwork(e.images, e.title, featured ? 7 : 6)}
     <div class="card-body">
-      <div class="kicker"><span class="cat">${esc(e.manual ? 'My event' : e.category || 'News')}</span><span class="dot"></span><span>${timeAgo(e.latestAt)}</span></div>
+      <div class="kicker"><span class="cat">${esc(e.manual ? 'My event' : e.category || 'News')}</span><span class="dot"></span><span>${timeAgo(e.latestAt)}</span>${e.check ? verdictChip(e.check.verdict) : ''}</div>
       <h2 class="card-title">${esc(e.title)}</h2>
       ${e.summary ? `<p class="card-summary">${esc(e.summary)}</p>` : e.building ? `<p class="card-summary">Gathering articles…</p>` : ''}
       <div class="card-foot">
@@ -405,6 +444,7 @@ function paintHero() {
         ${state.status?.llm && ev.articleCount ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
         <button class="btn ghost danger" data-act="delete">${icons.trash} Remove</button>
       </div>
+      ${checkHTML(ev)}
     </div>`;
   $('#hero').onclick = heroAction;
 }
@@ -425,6 +465,12 @@ async function heroAction(e) {
   try {
     if (act === 'dive') {
       openDive();
+    } else if (act === 'check') {
+      b.disabled = true;
+      b.classList.add('busy');
+      toast('Checking the story…');
+      Object.assign(ev, await api(`/api/events/${ev.id}/check`, { method: 'POST' }));
+      paintHero();
     } else if (act === 'pin') {
       Object.assign(ev, await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { pinned: !ev.pinned } }));
       paintHero();

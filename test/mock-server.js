@@ -115,6 +115,22 @@ function mockLLM(body) {
       claims: ['Elena is the strongest Gulf storm in a decade', 'Warmer sea temperatures are making Gulf hurricanes intensify faster', 'More than 400,000 homes lost power'],
       evidence_queries: ['hurricane rapid intensification sea surface temperature', 'hurricane power outage restoration'],
     });
+  if (/sceptical, even-handed news editor/.test(sys)) {
+    const strong = /Elena|rates/i.test(last);
+    return JSON.stringify({
+      plain: 'A big storm hit the Gulf coast overnight. Hundreds of thousands of homes lost power and people were told to stay indoors. (Fictional test data.)',
+      verdict: strong ? 'confirmed' : /talks/i.test(last) ? 'disputed' : 'developing',
+      why: 'Six outlets across the spectrum report the same core facts, citing officials.',
+      confirmed: ['The storm made landfall overnight.', 'Large numbers of homes lost power.', 'Officials told residents to shelter in place.'],
+      unverified: ['One outlet calls it the strongest Gulf storm in a decade; no agency has said so.', 'The 400,000 outage figure comes from news reports, not the utility.'],
+      spin: [
+        { side: 'Left', framing: 'Stresses the link to climate change and warmer seas.' },
+        { side: 'Right', framing: 'Focuses on how fast the federal response arrived and what it costs.' },
+        { side: 'Center', framing: 'Sticks to official guidance and the forecast track.' },
+      ],
+      missing: 'No outlet says how long it will take to restore power.',
+    });
+  }
   if (/needs a web search/.test(sys)) {
     const q = (last.match(/QUESTION: (.*)/) || [])[1] || '';
     return JSON.stringify(/look up|latest|how many|study|history|iran/i.test(q) ? { search: true, queries: ['Iran war', 'hurricane rapid intensification'], research: true } : { search: false, queries: [] });

@@ -22,6 +22,9 @@ export const config = {
   refreshMinutes: num(process.env.REFRESH_MINUTES, 30),
   // How far back articles are kept / considered for grouping.
   articleMaxAgeHours: num(process.env.ARTICLE_MAX_AGE_HOURS, 72),
+  // Reality check: automatically challenge events after each refresh (one model call per event).
+  autoCheck: !/^(off|false|0|no)$/i.test(process.env.AUTO_CHECK || 'on'),
+  autoCheckMax: num(process.env.AUTO_CHECK_MAX, 12),
   maxArticlesPerFeed: num(process.env.MAX_ARTICLES_PER_FEED, 25),
   userAgent:
     process.env.FETCH_USER_AGENT ||

@@ -16,6 +16,7 @@ _Screenshots use fictional sample data and placeholder images from the offline t
 - **Make your own events.** "New event" takes a topic (e.g. "War in Iran") and/or a few article links. It searches Bing News, Google News and GDELT plus the articles already gathered, has the AI keep only the ones really about the topic, and writes a summary. With **Keep tracking** on, new matching articles are added on every refresh; **Find more coverage** searches again on demand. Links from sites that block automated readers are still added (as link-only).
 - **Coverage by lean.** Each event shows how its coverage splits across left / center / right outlets.
 - **Deep dive.** Searches for more reporting (GDELT news search, Google News, Wikipedia), prioritising AP, Reuters, AFP, BBC, NPR, PBS, DW and similar, reads the articles and writes a cited briefing: bottom line, what's confirmed, disputed claims, background, how coverage differs, open questions. You can give it a focus, or dig into one specific article.
+- **Automatic reality check.** After every refresh, each story with two or more articles is challenged automatically: a plain-words summary, a verdict (Confirmed / Developing / Disputed / Unverified / Misleading), what's solid versus only claimed, how each side is spinning it, and what the coverage leaves out. The verdict shows on the home cards. Set `AUTO_CHECK=off` to disable or `AUTO_CHECK_MAX` (default 12) to limit checks per refresh.
 - **Evidence, not just news.** Each deep dive pulls out the key factual claims and checks them against primary sources: research papers (OpenAlex, Crossref, Europe PMC), government records (US Federal Register, GOV.UK), government and international-body sites (.gov, WHO, UN, EU, World Bank, OECD, IMF) and fact-checkers (PolitiFact, FactCheck.org, Snopes, Full Fact). The briefing gets an **Evidence check** (Supported / Partly supported / Contradicted / Unverified per claim) and sources are labelled Study, Government, Official body or Fact-check. Untick the box to skip it.
 - **Chat that can search the web.** When a question goes beyond the event's articles, the chat searches news, Wikipedia, research papers and fact-checkers, reads the top results and cites them as W1, W2… with links.
 - **Notes & custom data.** Add labelled notes, pasted data or links (links are read automatically). Everything you add is used by chat and deep dives.
@@ -90,6 +91,7 @@ src/cluster.js       AI grouping into events (keyword fallback without a key)
 src/refresh.js       Fetch → group → fill missing images (og:image) → prune
 src/research.js      Deep dive: plan searches, search, read, write cited briefing
 src/manual.js        User-created topic events: search, AI relevance check, tracking
+src/check.js         Automatic reality check: verdict, confirmed vs claimed, spin
 src/evidence.js      Primary sources: research papers, government records, official sites, fact-checkers
 src/search.js        Bing News / Google News / GDELT search, merged and de-duplicated
 src/chat.js          Event-grounded streaming chat

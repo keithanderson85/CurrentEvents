@@ -4,6 +4,7 @@ import { fetchAllFeeds } from './feeds.js';
 import { cluster } from './cluster.js';
 import { fetchArticle, mapLimit } from './fetcher.js';
 import { matchNewArticlesToTopics } from './manual.js';
+import { autoCheck } from './check.js';
 
 const BATCH = 60; // articles per grouping call (smaller batches keep the model's answer short and reliable)
 const MAX_GROUP_TRIES = 3; // stop re-sending articles that never match anything
@@ -56,6 +57,9 @@ async function doRefresh(log) {
   prune();
   save();
   status.lastRun = new Date().toISOString();
+  save();
+  await autoCheck(log).catch((e) => log('[check] failed:', e.message));
+  save();
   log(`[refresh] done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 

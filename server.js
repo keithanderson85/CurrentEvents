@@ -8,6 +8,7 @@ import { refresh, status as refreshStatus } from './src/refresh.js';
 import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
 import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
+import { checkEvent } from './src/check.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
 import { FEEDS } from './src/sources.js';
@@ -57,6 +58,7 @@ function eventSummary(ev) {
     id: ev.id,
     title: ev.title,
     summary: ev.summary,
+    check: ev.check || null,
     category: ev.category,
     manual: Boolean(ev.manual),
     track: ev.manual ? ev.track !== false : false,
@@ -166,6 +168,17 @@ app.delete('/api/events/:id', (req, res) => {
   save();
   res.json({ ok: true });
 });
+
+app.post(
+  '/api/events/:id/check',
+  wrap(async (req, res) => {
+    const ev = getEvent(req, res);
+    if (!ev) return;
+    if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use AI features.' });
+    await checkEvent(ev);
+    res.json(eventSummary(ev));
+  })
+);
 
 app.post(
   '/api/events/:id/summarize',
