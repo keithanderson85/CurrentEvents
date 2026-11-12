@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { config, hasLLM } from './src/config.js';
 import { load, db, save, flush, newId } from './src/store.js';
 import { refresh, status as refreshStatus } from './src/refresh.js';
@@ -14,7 +16,17 @@ import { CATEGORIES } from './src/cluster.js';
 load();
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(config.root, 'public')));
+// Serve index.html with version stamps on the CSS/JS links, so a browser never mixes a new page
+// with an old cached stylesheet after an update. Everything else revalidates on each load.
+const publicDir = path.join(config.root, 'public');
+const stamp = (f) => crypto.createHash('sha1').update(fs.readFileSync(path.join(publicDir, f))).digest('hex').slice(0, 10);
+const indexHtml = fs
+  .readFileSync(path.join(publicDir, 'index.html'), 'utf8')
+  .replace('href="/styles.css"', `href="/styles.css?v=${stamp('styles.css')}"`)
+  .replace('src="/app.js"', `src="/app.js?v=${stamp('app.js')}"`);
+const sendIndex = (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
+app.get(['/', '/index.html'], sendIndex);
+app.use(express.static(publicDir, { index: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => res.status(500).json({ error: e.message }));
 const getEvent = (req, res) => {
@@ -304,7 +316,7 @@ app.get('/api/img', async (req, res) => {
   }
 });
 
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(config.root, 'public', 'index.html')));
+app.get(/^\/(?!api\/).*/, sendIndex);
 
 // ---------- Start ----------
 

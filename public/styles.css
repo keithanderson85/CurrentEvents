@@ -498,3 +498,9 @@ h4, .card-title, .hero-title, .prose, .note-text { overflow-wrap: anywhere; }
   .tabs { gap: 0; }
   .tab { flex: 1; justify-content: center; padding: 10px 6px; font-size: 14px; }
 }
+@media (max-width: 1180px) and (min-width: 721px) {
+  /* Give the search box room on mid-size screens. */
+  .brand-text { display: none; }
+  .top-actions .btn .label { display: none; }
+  .top-actions .btn { padding: 8px 10px; }
+}
