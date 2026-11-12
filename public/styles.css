@@ -83,7 +83,8 @@
 
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
-html, body { margin: 0; }
+html, body { margin: 0; overflow-x: clip; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   background: var(--bg);
   color: var(--ink);
@@ -476,18 +477,12 @@ h4, .card-title, .hero-title, .prose, .note-text { overflow-wrap: anywhere; }
 .switch input:checked + .slider::after { transform: translateX(14px); }
 .switch input:focus-visible + .slider { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-/* ---------- Theme switch ---------- */
-.theme-switch { display: inline-flex; padding: 3px; gap: 2px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); }
-.theme-switch button { border: 0; background: transparent; color: var(--muted); width: 30px; height: 28px; border-radius: 999px; display: grid; place-items: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
-.theme-switch button svg { width: 16px; height: 16px; }
-.theme-switch button:hover { color: var(--ink); }
-.theme-switch button[aria-pressed='true'] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
-@media (max-width: 720px) {
-  /* On phones the switch collapses to one button that cycles system → light → dark. */
-  .theme-switch { padding: 0; background: transparent; border: 0; }
-  .theme-switch button:not([aria-pressed='true']) { display: none; }
-  .theme-switch button[aria-pressed='true'] { background: transparent; box-shadow: none; width: 36px; height: 36px; }
-}
+/* ---------- Theme toggle (one button: system -> light -> dark) ---------- */
+.theme-toggle .ti { display: none; }
+.theme-toggle[data-mode='system'] .ti-system,
+.theme-toggle[data-mode='light'] .ti-light,
+.theme-toggle[data-mode='dark'] .ti-dark { display: block; }
+.theme-toggle:not([data-mode]) .ti-system { display: block; }
 @media (max-width: 720px) {
   .brand-logo { height: 34px; }
   .top-actions { gap: 2px; }
@@ -503,4 +498,14 @@ h4, .card-title, .hero-title, .prose, .note-text { overflow-wrap: anywhere; }
   .brand-text { display: none; }
   .top-actions .btn .label { display: none; }
   .top-actions .btn { padding: 8px 10px; }
+}
+
+@media (max-width: 720px) {
+  /* iOS zooms into inputs smaller than 16px and leaves the page zoomed (looks "too wide"). */
+  input, textarea, select, .input { font-size: 16px !important; }
+}
+@media (max-width: 380px) {
+  .topbar-inner { padding: 10px 12px; gap: 8px; }
+  .brand-logo { height: 28px; }
+  .top-actions .btn { padding: 6px; }
 }

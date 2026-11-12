@@ -978,31 +978,33 @@ async function settingsModal() {
 $('#today').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 $('#newEventBtn').addEventListener('click', newEventModal);
 
-// Theme: system / light / dark, remembered in this browser.
+// Theme: one button that cycles system -> light -> dark, remembered in this browser.
+const THEMES = ['system', 'light', 'dark'];
+const THEME_LABEL = { system: 'match system', light: 'light', dark: 'dark' };
+let themeMode = 'system';
 function applyTheme(mode) {
+  themeMode = THEMES.includes(mode) ? mode : 'system';
   const root = document.documentElement;
-  if (mode === 'light' || mode === 'dark') root.dataset.theme = mode;
-  else delete root.dataset.theme;
+  if (themeMode === 'system') delete root.dataset.theme;
+  else root.dataset.theme = themeMode;
   try {
-    localStorage.setItem('theme', mode);
+    localStorage.setItem('theme', themeMode);
   } catch {}
-  $$('#themeSwitch [data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === mode)));
-  const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const btn = $('#themeToggle');
+  btn.dataset.mode = themeMode;
+  const next = THEMES[(THEMES.indexOf(themeMode) + 1) % 3];
+  btn.title = `Theme: ${THEME_LABEL[themeMode]} (click for ${THEME_LABEL[next]})`;
+  btn.setAttribute('aria-label', `Theme: ${THEME_LABEL[themeMode]}. Click to switch to ${THEME_LABEL[next]}.`);
+  const dark = themeMode === 'dark' || (themeMode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   $('meta[name=theme-color]')?.setAttribute('content', dark ? '#12110f' : '#f6f3ee');
 }
-let savedTheme = 'system';
 try {
-  savedTheme = localStorage.getItem('theme') || 'system';
+  themeMode = localStorage.getItem('theme') || 'system';
 } catch {}
-applyTheme(savedTheme);
-$('#themeSwitch').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-theme-set]');
-  if (!b) return;
-  // Pressing the current mode cycles to the next one (this is how the compact phone version works).
-  const order = ['system', 'light', 'dark'];
-  const mode = b.getAttribute('aria-pressed') === 'true' ? order[(order.indexOf(b.dataset.themeSet) + 1) % 3] : b.dataset.themeSet;
-  applyTheme(mode);
-  toast(`Theme: ${mode === 'system' ? 'match system' : mode}`);
+applyTheme(themeMode);
+$('#themeToggle').addEventListener('click', () => {
+  applyTheme(THEMES[(THEMES.indexOf(themeMode) + 1) % 3]);
+  toast(`Theme: ${THEME_LABEL[themeMode]}`);
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (!document.documentElement.dataset.theme) applyTheme('system');
