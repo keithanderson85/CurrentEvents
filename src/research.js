@@ -45,7 +45,7 @@ async function planQueries(event, articles, focus) {
         {
           role: 'system',
           content:
-            'You plan research on a news event. Return JSON {"queries":[2-3 short keyword search queries (3-6 words, no quotes or operators) likely to find more reporting on this exact event],"background":"a 1-4 word Wikipedia search term for background context","questions":[3-5 key open questions a careful reader would want answered],"claims":[3-5 specific, checkable factual claims made in the coverage: numbers, causes, legal or scientific statements],"evidence_queries":[2 short queries (3-7 words) to find research papers, government reports, official statistics or legal documents that would confirm or refute those claims; use technical or policy wording, not headline wording]}.',
+            'You plan research on a news event. Return JSON {"queries":[2-3 short keyword search queries (3-6 words, no quotes or operators) likely to find more reporting on this exact event],"background":"a 1-4 word Wikipedia search term for background context","questions":[3-5 key open questions a careful reader would want answered],"claims":[3-5 specific, checkable factual claims made in the coverage: numbers, causes, legal or scientific statements],"evidence_queries":[2 short queries (3-7 words) to find research papers, government reports, official statistics or legal documents that would confirm or refute those claims; use technical or policy wording, not headline wording],"official_queries":[1-2 short queries naming the specific government bodies, officials, courts, laws or programmes involved, e.g. "Georgia Secretary of State Seminole County election results" or "FDA approval letter drug name", to find the official record itself]}.',
         },
         {
           role: 'user',
@@ -55,13 +55,14 @@ async function planQueries(event, articles, focus) {
             .join('\n')}${focus ? `\n\nThe reader specifically wants to dig into: ${focus}` : ''}`,
         },
       ],
-      { temperature: 0.2, maxTokens: 900 }
+      { temperature: 0.2, maxTokens: 1100 }
     );
     return {
       queries: (r.queries || []).filter(Boolean).slice(0, 3).length ? r.queries.slice(0, 3) : fallback.queries,
       questions: (r.questions || []).slice(0, 5),
       background: r.background || event.title,
       claims: (r.claims || []).map(String).filter(Boolean).slice(0, 5),
+      officialQueries: (r.official_queries || []).map(String).filter(Boolean).slice(0, 2),
       evidenceQueries: (r.evidence_queries || r.evidenceQueries || []).map(String).filter(Boolean).slice(0, 2),
     };
   } catch {
@@ -167,7 +168,7 @@ async function deepDive(event, report, { focus, articleId, evidence = true }) {
   // Primary sources: research, government records, official bodies, fact-checkers.
   if (evidence) {
     const evQueries = plan.evidenceQueries?.length ? plan.evidenceQueries : [event.title];
-    const ev = await gatherEvidence({ queries: evQueries, claims: plan.claims, topic: event.title, step }).catch((e) => ({ docs: [], errors: [e.message] }));
+    const ev = await gatherEvidence({ queries: evQueries, officialQueries: plan.officialQueries || [], claims: plan.claims, topic: event.title, step }).catch((e) => ({ docs: [], errors: [e.message] }));
     if (ev.errors.length) step(`Some evidence sources didn't respond (${ev.errors.join(', ')}); continuing.`);
     if (!ev.docs.length) step('No relevant research or official documents found for this story.');
     docs.push(...ev.docs);

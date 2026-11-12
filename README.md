@@ -80,7 +80,11 @@ Front-page feeds (RSS, free, no keys), chosen to span the spectrum and include n
 
 BBC News, NPR, PBS NewsHour, Deutsche Welle, France 24, CBC, Al Jazeera, The Guardian, New York Times, ABC News, CBS News, CNBC, Wall Street Journal (world), The Hill, Sky News, Fox News, New York Post, Washington Examiner.
 
-Topic events and deep dives add **Bing News** and **GDELT** (news searches that return real article links and images), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Deep dives also search **OpenAlex** (scholarly papers with abstracts and citation counts; **Crossref** is the fallback), **Europe PMC**, the **Federal Register**, **GOV.UK**, and Google News limited to government, international-body and fact-checking sites (`src/evidence.js`). All are free and need no key. OpenAlex has a daily allowance per address; set `OPENALEX_API_KEY` (free from openalex.org) to raise it. Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
+Topic events and deep dives add **Bing News** and **GDELT** (news searches that return real article links and images), **Google News RSS** search (including a search restricted to AP, Reuters, BBC, NPR and PBS) and **Wikipedia** for background. Deep dives also search **OpenAlex** (scholarly papers with abstracts and citation counts; **Crossref** is the fallback), **Europe PMC**, the **Federal Register**, **GOV.UK**, and Google News limited to government, international-body and fact-checking sites (`src/evidence.js`). All are free and need no key. OpenAlex has a daily allowance per address; set `OPENALEX_API_KEY` (free from openalex.org) to raise it. 
+
+**Full web search (optional, recommended).** The key-less sources can't search the open web, so state and local government pages, court filings and statutes are mostly out of reach. Set `TAVILY_API_KEY` or `BRAVE_API_KEY` (both have free tiers) and deep dives and chat also search the whole web, limited to official and fact-checking sites for evidence.
+
+Lean ratings in `src/sources.js` are approximate, based on public media-bias ratings, and easy to edit.
 
 ## How it works
 

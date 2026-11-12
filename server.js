@@ -9,6 +9,7 @@ import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
 import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
 import { checkEvent } from './src/check.js';
+import { webSearchProvider } from './src/evidence.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
 import { FEEDS } from './src/sources.js';
@@ -339,6 +340,7 @@ const server = app.listen(config.port, async () => {
     console.log('No OPENROUTER_API_KEY set: using keyword grouping; deep dive shows sources only; chat disabled.');
   } else {
     console.log(`Model: ${currentModel()}`);
+    console.log(webSearchProvider() ? `Web search: ${webSearchProvider()}` : 'Web search: no BRAVE_API_KEY or TAVILY_API_KEY set, so official-site search is limited to news-indexed pages.');
     const check = await checkModel();
     if (check.ok === false) {
       console.warn(`\n⚠  Model "${check.model}" was not found on OpenRouter. Set OPENROUTER_MODEL in .env.`);

@@ -3,7 +3,7 @@ import { chatStream, chatJSON, currentModel } from './llm.js';
 import { truncate, fetchArticle, mapLimit } from './fetcher.js';
 import { searchNews } from './search.js';
 import { searchWikipedia } from './research.js';
-import { searchPapers, searchSites, sourceKind } from './evidence.js';
+import { searchPapers, searchSites, searchWeb, sourceKind } from './evidence.js';
 import { domainInfo, domainOf } from './sources.js';
 
 // Builds the context the model sees when you chat with an event: its articles,
@@ -77,17 +77,28 @@ async function planWebSearch(event, history, message) {
 
 // Search news, Wikipedia and (when useful) research papers and fact-checkers; read the top pages.
 export async function webSearch(plan, { have = new Set() } = {}) {
-  const [news, wiki, papers, checks] = await Promise.allSettled([
+  const [news, wiki, papers, checks, web] = await Promise.allSettled([
     searchNews(plan.queries, { timespan: '30d', perSource: 8 }),
     searchWikipedia(plan.queries[0]),
     plan.research ? searchPapers(plan.queries[0], { max: 3 }) : [],
     searchSites(plan.queries[0], ['politifact.com', 'factcheck.org', 'snopes.com', 'fullfact.org', 'gov'], { max: 4 }),
+    searchWeb(plan.queries[0], { max: 6 }), // empty unless a web search key is set
   ]);
   const val = (s, d) => (s.status === 'fulfilled' ? s.value : d);
   const hits = val(news, { results: [] }).results.filter((r) => !have.has(r.url));
   const readable = hits.filter((r) => r.via !== 'googlenews').slice(0, 5);
   const pages = await mapLimit(readable, 5, (r) => fetchArticle(r.url, { timeout: 9000 }));
   const out = [];
+  // Full web results (official pages first), read in full.
+  const webHits = val(web, [])
+    .filter((r) => !have.has(r.url))
+    .sort((a, b) => Number(a.kind === 'news') - Number(b.kind === 'news'))
+    .slice(0, 4);
+  const webPages = await mapLimit(webHits, 4, (r) => fetchArticle(r.url, { timeout: 9000 }));
+  webHits.forEach((r, i) => {
+    const text = webPages[i]?.text && webPages[i].text.length > 200 ? truncate(webPages[i].text, 1800) : r.text;
+    out.push({ title: r.title, url: r.url, name: r.name, kind: r.kind, meta: r.meta, text: text || r.title, headlineOnly: !text });
+  });
   readable.forEach((r, i) => {
     const text = pages[i]?.text && pages[i].text.length > 200 ? truncate(pages[i].text, 1800) : '';
     const info = domainInfo(r.domain || domainOf(r.url));

@@ -197,6 +197,16 @@ http
     if (u.pathname === '/fedreg/documents.json') {
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results: [{ title: 'Emergency declaration: Gulf coast hurricane response', abstract: 'Preliminary outage and response figures for affected states. (Fictional.)', html_url: 'https://www.federalregister.gov/documents/2026/11/10/2026-00001/gulf-hurricane', publication_date: '2026-11-10', type: 'Notice', agencies: [{ name: 'Department of Energy' }] }] }));
     }
+    if (u.pathname === '/tavily/search') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const q = JSON.parse(raw).query || '';
+      const results = [
+        { title: 'Governor declares state of emergency ahead of Hurricane Elena', url: 'https://www.flgov.example.gov/2026/11/10/emergency-elena', content: `Official statement. Query was: ${q}. (Fictional.)`, published_date: '2026-11-10' },
+        { title: 'A blog post', url: 'https://someblog.example.com/elena', content: 'Not official.' },
+      ];
+      return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results }));
+    }
     if (u.pathname === '/europepmc/search') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ resultList: { result: [] } }));
     if (u.pathname === '/govuk/search.json')
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ results: [{ title: 'Storm overflows and flood response statistics', link: '/government/statistics/flood-response', description: 'Official statistics on flood response. (Fictional.)', public_timestamp: '2026-10-01T09:00:00Z', organisations: [{ title: 'Environment Agency' }] }] }));

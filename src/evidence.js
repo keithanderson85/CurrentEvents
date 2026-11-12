@@ -203,6 +203,67 @@ export async function searchSites(query, sites, { max = 8 } = {}) {
   });
 }
 
+// ---------- Full web search (needs a free API key) ----------
+// The key-less sources above can't search the open web with site filters, so state and local
+// government pages, court documents, statutes and agency PDFs are out of their reach. With a
+// search key set, deep dives and chat also search the whole web, restricted to official sites.
+
+const BRAVE_KEY = process.env.BRAVE_API_KEY || '';
+const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
+const BRAVE = process.env.BRAVE_URL || 'https://api.search.brave.com/res/v1/web/search';
+const TAVILY = process.env.TAVILY_URL || 'https://api.tavily.com/search';
+
+export const webSearchProvider = () => (BRAVE_KEY ? 'brave' : TAVILY_KEY ? 'tavily' : null);
+
+/**
+ * Search the open web. `sites` limits results to those domains or endings (e.g. ['gov', 'who.int']).
+ */
+export async function searchWeb(query, { max = 8, sites = [] } = {}) {
+  const provider = webSearchProvider();
+  if (!provider) return [];
+  const inSites = (url) => {
+    if (!sites.length) return true;
+    const d = domainOf(url);
+    return sites.some((x) => d === x || d.endsWith('.' + x));
+  };
+  let raw = [];
+  if (provider === 'brave') {
+    const q = sites.length ? `${query} (${sites.map((x) => 'site:' + x).join(' OR ')})` : query;
+    const r = await fetch(`${BRAVE}?${new URLSearchParams({ q, count: String(Math.min(20, max + 4)), country: 'us', search_lang: 'en' })}`, {
+      headers: { Accept: 'application/json', 'X-Subscription-Token': BRAVE_KEY },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) throw new Error(`Brave search: HTTP ${r.status}`);
+    raw = ((await r.json()).web?.results || []).map((x) => ({ title: x.title, url: x.url, text: x.description, date: x.page_age || '' }));
+  } else {
+    const tlds = sites.filter((x) => !x.includes('.'));
+    const domains = sites.filter((x) => x.includes('.'));
+    const body = { query: tlds.length ? `${query} ${tlds.map((t) => 'site:.' + t).join(' OR ')}` : query, max_results: Math.min(20, max + 4), search_depth: 'basic' };
+    if (domains.length && !tlds.length) body.include_domains = domains;
+    const r = await fetch(TAVILY, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TAVILY_KEY}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!r.ok) throw new Error(`Tavily search: HTTP ${r.status}`);
+    raw = ((await r.json()).results || []).map((x) => ({ title: x.title, url: x.url, text: x.content, date: x.published_date || '' }));
+  }
+  return raw
+    .filter((x) => x.url && x.title && inSites(x.url))
+    .slice(0, max)
+    .map((x) => ({
+      title: clean(x.title),
+      url: x.url,
+      domain: domainOf(x.url),
+      name: domainOf(x.url),
+      kind: sourceKind(x.url),
+      text: truncate(clean(x.text), 600),
+      meta: String(x.date || '').slice(0, 10),
+      via: 'web',
+    }));
+}
+
 // ---------- Gathering ----------
 
 const SITES_OFFICIAL = ['gov', 'who.int', 'un.org', 'europa.eu', 'worldbank.org', 'oecd.org', 'imf.org'];
@@ -216,7 +277,7 @@ const SITES_FACTCHECK = FACTCHECK_DOMAINS.slice(0, 4);
  * @param {string}   p.topic       Event title (for relevance filtering).
  * @param {(m: string) => void} p.step  Progress callback.
  */
-export async function gatherEvidence({ queries, claims = [], topic, step = () => {} }) {
+export async function gatherEvidence({ queries, officialQueries = [], claims = [], topic, step = () => {} }) {
   const qs = [...new Set(queries.filter(Boolean))].slice(0, 2);
   if (!qs.length) return { docs: [], errors: [] };
   step(`Searching research papers, government records and fact-checkers for: ${qs.join(' · ')}`);
@@ -231,6 +292,16 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
     ...(qs[1] ? [['Government & official sites', searchSites(qs[1], SITES_OFFICIAL, { max: 5 })]] : []),
     ['Fact-checkers', searchSites(topic, SITES_FACTCHECK, { max: 6 })],
   ];
+  // Queries that name the agencies, courts or laws involved find the official record itself
+  // (a secretary of state's statement, a court filing, a statute) rather than background.
+  const oq = [...new Set([...officialQueries, topic].filter(Boolean))].slice(0, 3);
+  for (const q of oq) jobs.push(['Government & official sites', searchSites(q, ['gov'], { max: 5 })]);
+  if (webSearchProvider()) {
+    const official = [...SITES_OFFICIAL, 'us', 'edu', 'mil'];
+    for (const q of oq) jobs.push(['Web search (official sites)', searchWeb(q, { sites: official, max: 6 })]);
+    jobs.push(['Web search (official sites)', searchWeb(qs[0], { sites: official, max: 5 })]);
+    jobs.push(['Web search (fact-checkers)', searchWeb(topic, { sites: SITES_FACTCHECK, max: 4 })]);
+  }
   const settled = await Promise.allSettled(jobs.map((j) => j[1]));
   const errors = [];
   let candidates = [];
@@ -253,10 +324,10 @@ export async function gatherEvidence({ queries, claims = [], topic, step = () =>
   const picked = await pickEvidence(candidates, { topic, claims });
   const chosen = picked.slice(0, 9);
 
-  // Papers and Federal Register entries come with abstracts; GOV.UK pages are read in full.
+  // Papers and Federal Register entries come with abstracts; GOV.UK and web results are read in full.
   step(`Using ${chosen.length} primary source${chosen.length === 1 ? '' : 's'} of ${candidates.length} found…`);
   await mapLimit(
-    chosen.filter((c) => c.via === 'govuk'),
+    chosen.filter((c) => c.via === 'govuk' || c.via === 'web'),
     4,
     async (c) => {
       const page = await fetchArticle(c.url, { timeout: 12000 });
