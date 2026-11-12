@@ -1,0 +1,51 @@
+[
+  {
+    "key": "bbc",
+    "name": "BBC News",
+    "url": "http://localhost:4100/feeds/bbc.xml",
+    "lean": "center",
+    "kind": "public"
+  },
+  {
+    "key": "npr",
+    "name": "NPR",
+    "url": "http://localhost:4100/feeds/npr.xml",
+    "lean": "lean-left",
+    "kind": "public"
+  },
+  {
+    "key": "fox",
+    "name": "Fox News",
+    "url": "http://localhost:4100/feeds/fox.xml",
+    "lean": "right",
+    "kind": "public"
+  },
+  {
+    "key": "guardian",
+    "name": "The Guardian",
+    "url": "http://localhost:4100/feeds/guardian.xml",
+    "lean": "lean-left",
+    "kind": "public"
+  },
+  {
+    "key": "pbs",
+    "name": "PBS NewsHour",
+    "url": "http://localhost:4100/feeds/pbs.xml",
+    "lean": "center",
+    "kind": "public"
+  },
+  {
+    "key": "dw",
+    "name": "Deutsche Welle",
+    "url": "http://localhost:4100/feeds/dw.xml",
+    "lean": "center",
+    "kind": "public"
+  },
+  {
+    "key": "nypost",
+    "name": "New York Post",
+    "url": "http://localhost:4100/feeds/nypost.xml",
+    "lean": "lean-right",
+    "kind": "public"
+  }
+]

@@ -1,0 +1,130 @@
+// Local stand-in for news feeds, article pages and OpenRouter, used for offline testing and screenshots.
+// Run: node test/mock-server.js   (port 4100). All content is clearly fictional sample data.
+import http from 'node:http';
+
+const PORT = Number(process.env.MOCK_PORT || 4100);
+const base = `http://localhost:${PORT}`;
+
+const STORIES = [
+  { key: 'storm', heads: ['Storm Elena makes landfall on Gulf coast, thousands without power', 'Hurricane Elena slams coast as officials urge residents to shelter', 'Elena landfall: power outages spread across coastal counties', 'Storm Elena brings flooding and record winds to Gulf coast', 'Gulf coast braces as Elena knocks out power to thousands', 'Elena: flooding and outages after overnight landfall'], hue: 205 },
+  { key: 'rates', heads: ['Central bank holds interest rates steady, signals patience', 'Fed keeps interest rates unchanged amid cooling inflation', 'Interest rates held steady as central bank weighs slowing economy'], hue: 140 },
+  { key: 'chip', heads: ['Northwind unveils new AI chip to rival industry leaders', 'Northwind AI chip launch targets data centre market', 'Investors cheer Northwind AI chip unveiling'], hue: 275 },
+  { key: 'talks', heads: ['Peace talks resume in Geneva after months of stalemate', 'Geneva peace talks restart with ceasefire on agenda', 'Delegations return to Geneva as peace talks resume'], hue: 30 },
+  { key: 'fire', heads: ['Wildfire forces evacuations in hills north of city', 'Fast-moving wildfire prompts evacuations, crews battle winds'], hue: 10 },
+  { key: 'solo1', heads: ['Local library celebrates centennial with community festival'], hue: 90 },
+  { key: 'solo2', heads: ['Marathon champion announces retirement after record career'], hue: 330 },
+];
+const SOURCES = ['bbc', 'npr', 'fox', 'guardian', 'pbs', 'dw', 'nypost'];
+const NAMES = { bbc: 'BBC News', npr: 'NPR', fox: 'Fox News', guardian: 'The Guardian', pbs: 'PBS NewsHour', dw: 'Deutsche Welle', nypost: 'New York Post' };
+const LEANS = { bbc: 'center', npr: 'lean-left', fox: 'right', guardian: 'lean-left', pbs: 'center', dw: 'center', nypost: 'lean-right' };
+
+function itemsFor(src) {
+  const si = SOURCES.indexOf(src);
+  const out = [];
+  STORIES.forEach((s, k) => {
+    const h = s.heads[si % s.heads.length];
+    if (s.key.startsWith('solo') && si !== k % SOURCES.length) return;
+    if (s.heads.length < 3 && si > 2) return;
+    if (s.key !== 'storm' && si > 4) return;
+    const id = `${s.key}-${src}`;
+    out.push({ id, title: h, hue: (s.hue + si * 23) % 360, mins: 20 + k * 35 + si * 7, story: s.key });
+  });
+  return out;
+}
+
+function rss(src) {
+  const items = itemsFor(src)
+    .map((it, n) => {
+      const img = `${base}/img/${it.id}.svg?h=${it.hue}`;
+      // Some items carry media:content, one omits it to exercise the og:image fallback.
+      const media = n === 1 ? '' : `<media:content url="${img}" medium="image" width="800"/>`;
+      return `<item><title><![CDATA[${it.title}]]></title><link>${base}/article/${it.id}</link><guid>${base}/article/${it.id}</guid>
+      <description><![CDATA[<p>Sample summary for “${it.title}”. This is fictional test content used to preview the layout.</p>]]></description>
+      <pubDate>${new Date(Date.now() - it.mins * 60e3).toUTCString()}</pubDate>${media}</item>`;
+    })
+    .join('\n');
+  return `<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>${NAMES[src]}</title>${items}</channel></rss>`;
+}
+
+function svg(id, hue) {
+  // A soft "photo-like" gradient scene so the patchwork reads like real headline images.
+  const h2 = (hue + 40) % 360;
+  const seed = [...id].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const cx = 200 + (seed % 400);
+  const cy = 120 + (seed % 140);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${hue},55%,62%)"/><stop offset="1" stop-color="hsl(${h2},45%,28%)"/></linearGradient>
+<radialGradient id="s" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="hsl(${hue},90%,92%)" stop-opacity=".9"/><stop offset="1" stop-color="hsl(${hue},90%,80%)" stop-opacity="0"/></radialGradient></defs>
+<rect width="800" height="500" fill="url(#g)"/><circle cx="${cx}" cy="${cy}" r="170" fill="url(#s)"/>
+<path d="M0 ${380 - (seed % 60)} Q200 ${300 + (seed % 50)} 400 ${360 - (seed % 40)} T800 ${330 + (seed % 70)} V500 H0Z" fill="hsl(${h2},35%,20%)" opacity=".75"/>
+<path d="M0 ${430 - (seed % 30)} Q260 ${380 + (seed % 40)} 520 ${440 - (seed % 30)} T800 ${420} V500 H0Z" fill="hsl(${h2},30%,12%)" opacity=".85"/></svg>`;
+}
+
+function articlePage(id) {
+  const [story, src] = id.split('-');
+  const s = STORIES.find((x) => x.key === story);
+  const hue = s ? s.hue : 200;
+  const title = s ? s.heads[SOURCES.indexOf(src) % s.heads.length] : id;
+  return `<!doctype html><html><head><title>${title}</title><meta property="og:title" content="${title}"><meta property="og:image" content="${base}/img/${id}.svg?h=${hue}">
+  <meta property="og:description" content="Fictional sample article."></head><body><article>
+  <p>This is a fictional sample article used to test the Current Events app. It stands in for the full text of “${title}”.</p>
+  <p>Officials said the situation was developing and that more information would be released later in the day, according to the sample report.</p>
+  <p>Different outlets emphasised different details, which the app's deep dive is designed to compare side by side for the reader.</p></article></body></html>`;
+}
+
+function mockLLM(body) {
+  const sys = body.messages.map((m) => m.content).join('\n');
+  const last = body.messages[body.messages.length - 1].content;
+  if (/group news articles/.test(sys)) {
+    // Group by the story keyword embedded in the headline's first distinctive word.
+    const lines = last.split('NEW ARTICLES:\n')[1].split('\n');
+    const keys = { storm: /Elena/, rates: /rates/i, chip: /chip/i, talks: /talks/i, fire: /wildfire/i };
+    const titles = { storm: 'Storm Elena makes landfall on the Gulf coast', rates: 'Central bank holds interest rates steady', chip: 'Northwind unveils AI chip for data centres', talks: 'Geneva peace talks resume after stalemate', fire: 'Wildfire forces evacuations north of the city' };
+    const cats = { storm: 'Climate', rates: 'Business', chip: 'Tech', talks: 'World', fire: 'US' };
+    const events = Object.entries(keys)
+      .map(([k, re]) => ({
+        existing_id: null,
+        title: titles[k],
+        summary: `Sample summary: ${titles[k].toLowerCase()}. Outlets report the core facts consistently while differing in emphasis. (Fictional test data.)`,
+        category: cats[k],
+        articles: lines.map((l, i) => (re.test(l) ? Number(l.split('.')[0]) : null)).filter((x) => x !== null),
+      }))
+      .filter((e) => e.articles.length);
+    return JSON.stringify({ events });
+  }
+  if (/plan news research/.test(sys)) return JSON.stringify({ queries: ['storm elena landfall', 'elena power outages'], background: 'Tropical cyclone', questions: ['How many people lost power?', 'What is the forecast track?'] });
+  if (/neutral news summaries/.test(sys)) return JSON.stringify({ title: 'Sample event summary', summary: 'A sample neutral summary of the event. (Fictional.)', category: 'World' });
+  if (/research analyst/.test(sys))
+    return `## Bottom line\nStorm Elena made landfall on the Gulf coast, causing widespread outages [1][2]. Officials urged residents to shelter in place [3].\n\n## What we know\n- Landfall occurred overnight, according to multiple outlets [1][2][3].\n- Thousands of homes lost power [1][4].\n\n## Claims & disputed points\n- One outlet described the storm as the strongest in a decade; this is **not corroborated** by others [5].\n\n## Background\nGulf storms of this kind typically form in late summer [6].\n\n## How coverage differs\n- **BBC News** and **PBS** focus on official guidance [1][3]; **Fox News** emphasises the federal response [5].\n\n## Open questions\n- How long will restoration take?\n\n## Source quality note\nCore facts are consistent across wire-style and public-broadcaster sources. *(Fictional sample briefing.)*`;
+  return `Here's what the sources say:\n\n- **Confirmed:** landfall and power outages are reported across outlets (1)(2).\n- **Disputed:** claims about storm strength vary [1].\n\n*(This is a mock reply for testing.)*`;
+}
+
+http
+  .createServer(async (req, res) => {
+    const u = new URL(req.url, base);
+    let m;
+    if ((m = u.pathname.match(/^\/feeds\/(\w+)\.xml$/))) return res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(rss(m[1]));
+    if ((m = u.pathname.match(/^\/img\/([\w-]+)\.svg$/))) return res.writeHead(200, { 'Content-Type': 'image/svg+xml' }).end(svg(m[1], Number(u.searchParams.get('h') || 200)));
+    if ((m = u.pathname.match(/^\/article\/([\w-]+)$/))) return res.writeHead(200, { 'Content-Type': 'text/html' }).end(articlePage(m[1]));
+    if (u.pathname === '/v1/models') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'deepseek/deepseek-v4.1-flash-1017' }] }));
+    if (u.pathname === '/v1/chat/completions') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const body = JSON.parse(raw);
+      const content = mockLLM(body);
+      if (body.stream) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(': OPENROUTER PROCESSING\n\n');
+        for (const chunk of content.match(/.{1,12}/gs)) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
+          await new Promise((r) => setTimeout(r, 15));
+        }
+        return res.end('data: [DONE]\n\n');
+      }
+      return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+    }
+    res.writeHead(404).end('not found');
+  })
+  .listen(PORT, () => console.log(`mock server on ${base}`));
+
+export const mockFeeds = SOURCES.map((k) => ({ key: k, name: NAMES[k], url: `${base}/feeds/${k}.xml`, lean: LEANS[k], kind: 'public' }));
