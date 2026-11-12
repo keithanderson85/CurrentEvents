@@ -1,3 +1,5 @@
+name: openframe-news
+
 services:
   app:
     image: ghcr.io/keithanderson85/currentevents:latest
@@ -15,3 +17,4 @@ services:
 
 volumes:
   app-data:
+    name: openframe-news-data
