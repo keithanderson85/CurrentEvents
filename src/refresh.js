@@ -5,6 +5,7 @@ import { cluster } from './cluster.js';
 import { fetchArticle, mapLimit } from './fetcher.js';
 import { matchNewArticlesToTopics } from './manual.js';
 import { autoCheck } from './check.js';
+import { anyUserData } from './auth.js';
 
 const BATCH = 60; // articles per grouping call (smaller batches keep the model's answer short and reliable)
 const MAX_GROUP_TRIES = 3; // stop re-sending articles that never match anything
@@ -74,6 +75,7 @@ export async function groupPending(log = console.log) {
   for (let i = 0; i < pool.length; i += BATCH) {
     const batch = pool.slice(i, i + BATCH);
     const active = Object.values(store.events)
+      .filter((e) => !e.ownerId) // never file news into someone's private custom event
       .filter((e) => now - new Date(e.updatedAt).getTime() < EVENT_ACTIVE_HOURS * 3600e3)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, 80);
@@ -100,9 +102,6 @@ function applyGroups(groups) {
         articleIds: [],
         createdAt: now,
         updatedAt: now,
-        notes: [],
-        chat: [],
-        research: [],
         titleLocked: false,
       };
       store.events[ev.id] = ev;
@@ -144,7 +143,7 @@ function prune() {
   const store = db();
   const now = Date.now();
   for (const [id, e] of Object.entries(store.events)) {
-    const hasUserData = e.manual || e.notes?.length || e.chat?.length || e.research?.length || e.pinned;
+    const hasUserData = e.manual || anyUserData(e);
     if (!hasUserData && now - new Date(e.updatedAt).getTime() > EVENT_MAX_AGE_DAYS * 864e5) {
       delete store.events[id]; // its articles are removed below once nothing references them
     }

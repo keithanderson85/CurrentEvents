@@ -11,7 +11,7 @@ import { tokens, CATEGORIES } from './cluster.js';
 
 const MAX_ADD_PER_RUN = 25;
 
-export async function createManualEvent({ title, description = '', urls = [], autoFind = true }) {
+export async function createManualEvent({ title, description = '', urls = [], autoFind = true, ownerId = null }) {
   const store = db();
   const now = new Date().toISOString();
   const event = {
@@ -23,11 +23,9 @@ export async function createManualEvent({ title, description = '', urls = [], au
     articleIds: [],
     createdAt: now,
     updatedAt: now,
-    notes: [],
-    chat: [],
-    research: [],
     titleLocked: Boolean(title?.trim()),
     manual: true,
+    ownerId, // custom events belong to the person who made them
     track: autoFind,
     building: true,
   };

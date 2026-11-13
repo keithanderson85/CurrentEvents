@@ -6,28 +6,30 @@ import { webSearch } from './chat.js';
 import { createManualEvent, addArticleToEvent } from './manual.js';
 import { runDeepDive } from './research.js';
 import { domainOf } from './sources.js';
+import { mine, canSee } from './auth.js';
 
 // The Assistant: a general chat that can also do things in the app. Anything that changes
 // your data (new event, adding links, starting a deep dive) is only *proposed*: you get a
 // card and nothing happens until you confirm.
 
-const thread = () => {
+// Each person has their own conversation and files.
+const thread = (uid) => {
   const store = db();
-  store.assistant = store.assistant || { messages: [] };
-  return store.assistant;
+  store.assistants = store.assistants || {};
+  return (store.assistants[uid] = store.assistants[uid] || { messages: [] });
 };
-export const assistantMessages = () => thread().messages;
-export function clearAssistant() {
-  thread().messages = [];
-  thread().files = {};
+export const assistantMessages = (uid) => thread(uid).messages;
+export function clearAssistant(uid) {
+  thread(uid).messages = [];
+  thread(uid).files = {};
   save();
 }
 
 // Files are stored as extracted text only (the original bytes are not kept).
 const FILE_KEEP_CHARS = 120000;
-export async function addAssistantFile(name, buf) {
+export async function addAssistantFile(uid, name, buf) {
   const { text, pages } = await extractFile(name, buf);
-  const t = thread();
+  const t = thread(uid);
   t.files = t.files || {};
   const id = newId('f_');
   t.files[id] = { id, name, text: text.slice(0, FILE_KEEP_CHARS), chars: text.length, pages: pages || null, ts: new Date().toISOString() };
@@ -37,19 +39,20 @@ export async function addAssistantFile(name, buf) {
   save();
   return { id, name, chars: text.length, pages: pages || null, truncated: text.length > FILE_KEEP_CHARS };
 }
-const fileById = (id) => thread().files?.[id];
+const fileById = (uid, id) => thread(uid).files?.[id];
 
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 const ACTIONS = ['none', 'search', 'create_event', 'add_to_event', 'deep_dive'];
 
-const recentEvents = () =>
+const recentEvents = (uid) =>
   Object.values(db().events)
+    .filter((e) => canSee(e, uid))
     .filter((e) => e.articleIds.length || e.manual)
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     .slice(0, 40);
 
-async function plan(history, message, urls, files = []) {
-  const events = recentEvents();
+async function plan(uid, history, message, urls, files = []) {
+  const events = recentEvents(uid);
   try {
     const r = await chatJSON(
       [
@@ -90,8 +93,9 @@ If the topic matches an existing event, prefer deep_dive or search over create_e
   }
 }
 
-function proposalFrom(p, urls, files = []) {
-  const ev = p.eventId ? db().events[p.eventId] : null;
+function proposalFrom(uid, p, urls, files = []) {
+  let ev = p.eventId ? db().events[p.eventId] : null;
+  if (ev && !canSee(ev, uid)) ev = null;
   const fl = files.map((f) => ({ id: f.id, name: f.name }));
   if (p.action === 'create_event' && p.title) return { type: 'create_event', title: truncate(p.title, 120), description: p.description, urls, files: fl, status: 'pending' };
   if (p.action === 'add_to_event' && ev && (urls.length || fl.length)) return { type: 'add_to_event', eventId: ev.id, eventTitle: ev.title, urls, files: fl, status: 'pending' };
@@ -108,11 +112,10 @@ const describe = (pr) =>
     : `run a deep dive on the existing event "${pr.eventTitle}"${pr.focus ? ` focused on ${pr.focus}` : ''}`;
 
 // Save an attached file's text on an event as a note, so chat and deep dives can use it.
-function fileNote(ev, f) {
-  const file = fileById(f.id);
+function fileNote(uid, ev, f) {
+  const file = fileById(uid, f.id);
   if (!file) return false;
-  ev.notes = ev.notes || [];
-  ev.notes.push({ id: newId('n_'), label: `File: ${file.name}`.slice(0, 60), text: truncate(file.text, 6000), url: '', createdAt: new Date().toISOString() });
+  mine(ev, uid).notes.push({ id: newId('n_'), label: `File: ${file.name}`.slice(0, 60), text: truncate(file.text, 6000), url: '', createdAt: new Date().toISOString() });
   return true;
 }
 
@@ -123,22 +126,23 @@ const SYSTEM = () => `You are the assistant inside OpenFrame News, a personal ne
 - You cannot change anything in the app yourself. When a PROPOSED ACTION is listed, the user sees a card with Confirm and Cancel buttons below your reply. Say in one sentence what the action would do and ask them to confirm. Never say it has been done.
 - If no action is proposed and the user wants one, tell them what you can do: follow a story as a new event, add links or files to an event, or run a deep dive on an event.`;
 
-export async function streamAssistant(message, { onToken, onStatus = () => {}, onSources = () => {}, onProposal = () => {}, signal, fileIds = [] }) {
-  const t = thread();
+export async function streamAssistant(uid, message, { onToken, onStatus = () => {}, onSources = () => {}, onProposal = () => {}, signal, fileIds = [] }) {
+  const t = thread(uid);
+  const fileOf = (id) => fileById(uid, id);
   const history = t.messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-  const files = fileIds.map(fileById).filter(Boolean);
+  const files = fileIds.map(fileOf).filter(Boolean);
   // Files from earlier in this conversation stay available for follow-up questions.
   const earlier = t.messages
     .flatMap((m) => m.files || [])
-    .map((f) => fileById(f.id))
+    .map((f) => fileOf(f.id))
     .filter((f) => f && !files.includes(f))
     .slice(-2);
   t.messages.push({ role: 'user', content: message, ts: new Date().toISOString(), ...(files.length ? { files: files.map((f) => ({ id: f.id, name: f.name })) } : {}) });
   save();
 
   const urls = [...new Set(message.match(URL_RE) || [])].slice(0, 8);
-  const p = await plan(history, message, urls, files);
-  const proposal = proposalFrom(p, urls, files);
+  const p = await plan(uid, history, message, urls, files);
+  const proposal = proposalFrom(uid, p, urls, files);
 
   // Read links the user dropped in, so they can be discussed straight away.
   let dropped = [];
@@ -171,7 +175,7 @@ export async function streamAssistant(message, { onToken, onStatus = () => {}, o
         .join('\n\n')}`
     );
   if (proposal) blocks.push(`PROPOSED ACTION (awaiting the user's confirmation): ${describe(proposal)}.`);
-  const events = recentEvents().slice(0, 25);
+  const events = recentEvents(uid).slice(0, 25);
   if (events.length) blocks.push(`EVENTS CURRENTLY IN THE APP (for reference):\n${events.map((e) => `- ${e.title}${e.check?.verdict ? ` [${e.check.verdict}]` : ''}`).join('\n')}`);
 
   const messages = [{ role: 'system', content: SYSTEM() }, ...history, ...(blocks.length ? [{ role: 'system', content: blocks.join('\n\n') }] : []), { role: 'user', content: message }];
@@ -194,8 +198,8 @@ export async function streamAssistant(message, { onToken, onStatus = () => {}, o
 }
 
 // Carry out (or decline) the proposal attached to a message. Only ever called from the user's click.
-export async function actOnProposal(index, accept) {
-  const t = thread();
+export async function actOnProposal(uid, index, accept) {
+  const t = thread(uid);
   const msg = t.messages[index];
   const pr = msg?.proposal;
   if (!pr) throw new Error('That suggestion is no longer available.');
@@ -207,21 +211,21 @@ export async function actOnProposal(index, accept) {
   }
   let note = '';
   if (pr.type === 'create_event') {
-    const ev = await createManualEvent({ title: pr.title, description: pr.description || '', urls: pr.urls || [], autoFind: true });
+    const ev = await createManualEvent({ title: pr.title, description: pr.description || '', urls: pr.urls || [], autoFind: true, ownerId: uid });
     pr.eventId = ev.id;
-    for (const f of pr.files || []) fileNote(ev, f);
+    for (const f of pr.files || []) fileNote(uid, ev, f);
     note = `Done. I created **${ev.title}** and I'm gathering coverage for it now. It will keep tracking new articles.`;
   } else {
     const ev = db().events[pr.eventId];
-    if (!ev) throw new Error('That event no longer exists.');
+    if (!ev || !canSee(ev, uid)) throw new Error('That event no longer exists.');
     if (pr.type === 'add_to_event') {
       const results = await mapLimit(pr.urls || [], 3, (u) => addArticleToEvent(ev, u));
       const ok = results.filter((r) => r && !r.error).length;
-      const saved = (pr.files || []).filter((f) => fileNote(ev, f)).length;
+      const saved = (pr.files || []).filter((f) => fileNote(uid, ev, f)).length;
       const parts = [pr.urls?.length ? `${ok} of ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'}` : '', saved ? `${saved} file${saved === 1 ? '' : 's'} (as notes)` : ''].filter(Boolean);
       note = `Done. I added ${parts.join(' and ') || 'nothing'} to **${ev.title}**.`;
     } else {
-      await runDeepDive(ev.id, { focus: pr.focus || '' });
+      await runDeepDive(ev.id, { focus: pr.focus || '', userId: uid });
       note = `Done. The deep dive on **${ev.title}** is running. It takes a minute or two; open the event to watch it.`;
     }
   }

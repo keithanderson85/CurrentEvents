@@ -3,6 +3,7 @@ import { db, save } from './store.js';
 import { chatJSON, currentModel } from './llm.js';
 import { truncate, mapLimit } from './fetcher.js';
 import { searchSites } from './evidence.js';
+import { anyPinned } from './auth.js';
 
 // Reality check: runs automatically on events after each refresh. It restates the story in
 // plain words, says how solid it is, separates confirmed facts from unverified claims,
@@ -86,14 +87,14 @@ export async function autoCheck(log = console.log) {
   const store = db();
   const now = Date.now();
   const due = Object.values(store.events)
-    .filter((e) => now - new Date(e.updatedAt).getTime() < ACTIVE_HOURS * 3600e3 || e.pinned || e.manual)
+    .filter((e) => now - new Date(e.updatedAt).getTime() < ACTIVE_HOURS * 3600e3 || anyPinned(e) || e.manual)
     .filter((e) => {
       const n = e.articleIds.length;
       if (n < (e.manual ? 1 : 2) || e.building) return false;
       if (!e.check) return true;
       return n >= (e.check.articleCount || 0) + RECHECK_AFTER_NEW_ARTICLES;
     })
-    .sort((a, b) => Number(Boolean(b.pinned || b.manual)) - Number(Boolean(a.pinned || a.manual)) || b.articleIds.length - a.articleIds.length)
+    .sort((a, b) => Number(Boolean(anyPinned(b) || b.manual)) - Number(Boolean(anyPinned(a) || a.manual)) || b.articleIds.length - a.articleIds.length)
     .slice(0, config.autoCheckMax);
   if (!due.length) return;
   let ok = 0;

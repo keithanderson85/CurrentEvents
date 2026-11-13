@@ -5,17 +5,19 @@ import { searchNews } from './search.js';
 import { searchWikipedia } from './research.js';
 import { searchPapers, searchSites, searchWeb, sourceKind } from './evidence.js';
 import { domainInfo, domainOf } from './sources.js';
+import { mine, peek } from './auth.js';
 
 // Builds the context the model sees when you chat with an event: its articles,
 // your notes/custom data, and the latest deep-dive briefing.
-export function eventContext(event) {
+export function eventContext(event, userId) {
+  const me = peek(event, userId);
   const store = db();
   const articles = event.articleIds.map((id) => store.articles[id]).filter(Boolean);
   const arts = articles
     .slice(0, 25)
     .map((a, i) => `(${i + 1}) ${a.source} [${a.lean || 'unknown lean'}] — ${a.title}\n${truncate(a.text || a.summary || '', a.text ? 1500 : 400)}\n${a.url}`)
     .join('\n\n');
-  const notes = (event.notes || [])
+  const notes = (me.notes || [])
     .map((n) => {
       const head = n.label ? `${n.label}: ` : '';
       const body = n.text || '';
@@ -23,7 +25,7 @@ export function eventContext(event) {
       return `- ${head}${body}${link}`;
     })
     .join('\n');
-  const latest = (event.research || []).find((r) => r.status === 'done' && r.briefing);
+  const latest = (me.research || []).find((r) => r.status === 'done' && r.briefing);
   const research = latest
     ? `${latest.briefing}\n\nBriefing sources:\n${latest.sources.map((s) => `[${s.n}] ${s.name} — ${s.title} (${s.url})`).join('\n')}`
     : '';
@@ -114,12 +116,12 @@ export async function webSearch(plan, { have = new Set() } = {}) {
   return out.slice(0, 12).map((o, i) => ({ n: i + 1, ...o }));
 }
 
-export async function streamChat(eventId, message, { onToken, onStatus = () => {}, onSources = () => {}, signal, web = true }) {
+export async function streamChat(eventId, message, { onToken, onStatus = () => {}, onSources = () => {}, signal, web = true, userId }) {
   const event = db().events[eventId];
   if (!event) throw new Error('Event not found');
-  event.chat = event.chat || [];
-  const history = event.chat.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-  event.chat.push({ role: 'user', content: message, ts: new Date().toISOString() });
+  const chat = mine(event, userId).chat;
+  const history = chat.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+  chat.push({ role: 'user', content: message, ts: new Date().toISOString() });
   save();
 
   let sources = [];
@@ -142,7 +144,7 @@ export async function streamChat(eventId, message, { onToken, onStatus = () => {
     : '';
   const messages = [
     { role: 'system', content: SYSTEM + (sources.length ? WEB_RULES : '') },
-    { role: 'system', content: eventContext(event) },
+    { role: 'system', content: eventContext(event, userId) },
     ...history,
     ...(webBlock ? [{ role: 'system', content: webBlock }] : []),
     { role: 'user', content: message },
@@ -152,7 +154,7 @@ export async function streamChat(eventId, message, { onToken, onStatus = () => {
     full = await chatStream(messages, { model: currentModel('research'), onToken, signal });
   } finally {
     if (full) {
-      event.chat.push({ role: 'assistant', content: full, ts: new Date().toISOString(), ...(sources.length ? { sources: sources.map(({ text, ...s }) => s) } : {}) });
+      chat.push({ role: 'assistant', content: full, ts: new Date().toISOString(), ...(sources.length ? { sources: sources.map(({ text, ...s }) => s) } : {}) });
       save();
     }
   }

@@ -5,6 +5,7 @@ import { fetchText, fetchArticle, mapLimit, truncate } from './fetcher.js';
 import { domainInfo, domainOf, NEUTRAL_DOMAINS } from './sources.js';
 import { searchNews, searchGoogleNews } from './search.js';
 import { gatherEvidence, sourceKind } from './evidence.js';
+import { mine, peek } from './auth.js';
 
 // "Deep dive": go beyond the articles we already have, prioritising wire services and
 // public broadcasters, then have the model write a neutral, cited briefing.
@@ -72,7 +73,7 @@ async function planQueries(event, articles, focus) {
 
 const LEAN_ORDER = ['center', 'lean-left', 'lean-right', 'left', 'right', 'unknown'];
 
-export async function runDeepDive(eventId, { focus = '', articleId = null, evidence = true } = {}) {
+export async function runDeepDive(eventId, { focus = '', articleId = null, evidence = true, userId } = {}) {
   const store = db();
   const event = store.events[eventId];
   if (!event) throw new Error('Event not found');
@@ -86,11 +87,10 @@ export async function runDeepDive(eventId, { focus = '', articleId = null, evide
     createdAt: new Date().toISOString(),
     model: hasLLM() ? currentModel('research') : null,
   };
-  event.research = event.research || [];
-  event.research.unshift(report);
+  mine(event, userId).research.unshift(report); // deep dives belong to the person who ran them
   save();
   // Run in the background; the client polls the event to watch progress.
-  deepDive(event, report, { focus: report.focus, articleId, evidence }).catch((e) => {
+  deepDive(event, report, { focus: report.focus, articleId, evidence, userId }).catch((e) => {
     report.status = 'error';
     report.error = e.message;
     save();
@@ -98,7 +98,7 @@ export async function runDeepDive(eventId, { focus = '', articleId = null, evide
   return report;
 }
 
-async function deepDive(event, report, { focus, articleId, evidence = true }) {
+async function deepDive(event, report, { focus, articleId, evidence = true, userId }) {
   const store = db();
   const step = (msg) => {
     report.progress.push(msg);
@@ -211,7 +211,7 @@ async function deepDive(event, report, { focus, articleId, evidence = true }) {
   }
 
   step(`Writing a neutral briefing from ${docs.length} sources…`);
-  const userNotes = (event.notes || []).filter((n) => n.text).map((n) => `- ${n.text}`).join('\n');
+  const userNotes = (peek(event, userId).notes || []).filter((n) => n.text).map((n) => `- ${n.text}`).join('\n');
   const sourceBlock = docs
     .map((d, i) => {
       const s = report.sources[i];

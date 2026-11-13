@@ -11,6 +11,8 @@ import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } fr
 import { checkEvent } from './src/check.js';
 import { streamAssistant, assistantMessages, clearAssistant, actOnProposal, addAssistantFile } from './src/assistant.js';
 import { MAX_FILE_BYTES } from './src/files.js';
+import * as auth from './src/auth.js';
+import { mine, peek, canSee } from './src/auth.js';
 import { webSearchProvider } from './src/evidence.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
@@ -19,6 +21,7 @@ import { CATEGORIES } from './src/cluster.js';
 
 load();
 const app = express();
+app.set('trust proxy', true); // behind a reverse proxy: use the visitor's address and https flag
 app.use(express.json({ limit: '1mb' }));
 // Serve index.html with version stamps on the CSS/JS links, so a browser never mixes a new page
 // with an old cached stylesheet after an update. Everything else revalidates on each load.
@@ -34,12 +37,107 @@ app.use(express.static(publicDir, { index: false, setHeaders: (res) => res.setHe
 
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => res.status(500).json({ error: e.message }));
 const getEvent = (req, res) => {
-  const ev = db().events[req.params.id];
+  let ev = db().events[req.params.id];
+  if (ev && !canSee(ev, req.user.id)) ev = null; // someone else's custom event
   if (!ev) res.status(404).json({ error: 'Event not found' });
   return ev;
 };
 
-function eventSummary(ev) {
+// ---------- Accounts ----------
+
+const authWrap = (bucket, fn) => async (req, res) => {
+  try {
+    if (bucket) auth.rateLimit(req, bucket);
+    await fn(req, res);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+};
+const authState = (req) => ({
+  user: auth.publicUser(auth.userFromRequest(req)),
+  setup: auth.userCount() === 0, // nobody has signed up yet: the first account becomes the admin
+  needsCode: auth.userCount() > 0 || Boolean(process.env.SIGNUP_CODE),
+  signupOpen: auth.userCount() === 0 || Boolean(auth.inviteCode()),
+  emailReset: auth.emailEnabled(),
+});
+const siteUrl = (req) => (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+
+app.get('/api/auth/me', (req, res) => res.json(authState(req)));
+app.post(
+  '/api/auth/signup',
+  authWrap('signup', async (req, res) => {
+    const user = await auth.signup(req.body || {});
+    auth.startSession(res, req, user);
+    res.json({ user: auth.publicUser(user) });
+  })
+);
+app.post(
+  '/api/auth/login',
+  authWrap('login', async (req, res) => {
+    const user = await auth.login(req.body || {});
+    auth.startSession(res, req, user);
+    res.json({ user: auth.publicUser(user) });
+  })
+);
+app.post('/api/auth/logout', (req, res) => {
+  auth.endSession(req, res);
+  res.json({ ok: true });
+});
+// Always answers the same way, so it can't be used to find out which emails have accounts.
+app.post(
+  '/api/auth/forgot',
+  authWrap('forgot', async (req, res) => {
+    const user = auth.findUserByEmail(req.body?.email);
+    if (user && auth.emailEnabled()) {
+      const link = `${siteUrl(req)}/#/reset/${auth.createResetToken(user.id)}`;
+      auth.sendResetEmail(user, link).catch((e) => console.log('[auth] could not send reset email:', e.message));
+    }
+    res.json({ ok: true, emailReset: auth.emailEnabled() });
+  })
+);
+app.post(
+  '/api/auth/reset',
+  authWrap('reset', async (req, res) => {
+    const user = await auth.resetPassword(req.body?.token, req.body?.password);
+    auth.startSession(res, req, user);
+    res.json({ user: auth.publicUser(user) });
+  })
+);
+
+// Everything below needs a logged-in account.
+app.use('/api', (req, res, next) => {
+  const user = auth.userFromRequest(req);
+  if (!user) return res.status(401).json({ error: 'Please log in.', auth: true });
+  req.user = user;
+  next();
+});
+const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.status(403).json({ error: 'Only the admin can do that.' }));
+
+app.put(
+  '/api/auth/password',
+  authWrap('password', async (req, res) => {
+    await auth.changePassword(req.user, req.body?.current, req.body?.password);
+    res.json({ ok: true });
+  })
+);
+app.get('/api/admin/users', adminOnly, (req, res) => res.json({ users: auth.listUsers(), inviteCode: auth.inviteCode(), emailReset: auth.emailEnabled() }));
+app.put('/api/admin/invite', adminOnly, (req, res) => {
+  auth.setInviteCode(req.body?.code);
+  res.json({ inviteCode: auth.inviteCode() });
+});
+// A one-time reset link the admin can pass on (for when email isn't set up).
+app.post('/api/admin/users/:uid/reset-link', adminOnly, (req, res) => {
+  if (!db().users?.[req.params.uid]) return res.status(404).json({ error: 'Account not found' });
+  res.json({ link: `${siteUrl(req)}/#/reset/${auth.createResetToken(req.params.uid)}` });
+});
+app.delete('/api/admin/users/:uid', adminOnly, (req, res) => {
+  if (req.params.uid === req.user.id) return res.status(400).json({ error: 'You can’t remove your own account.' });
+  auth.removeUser(req.params.uid);
+  res.json({ ok: true });
+});
+
+function eventSummary(ev, uid) {
+  const me = peek(ev, uid);
   const store = db();
   const arts = ev.articleIds.map((id) => store.articles[id]).filter(Boolean);
   const sources = [...new Set(arts.map((a) => a.source))];
@@ -67,7 +165,8 @@ function eventSummary(ev) {
     track: ev.manual ? ev.track !== false : false,
     description: ev.description || '',
     lastFoundAt: ev.lastFoundAt || null,
-    pinned: Boolean(ev.pinned),
+    pinned: Boolean(me.pinned),
+    private: Boolean(ev.ownerId),
     building: Boolean(ev.building),
     articleCount: arts.length,
     sources,
@@ -76,9 +175,9 @@ function eventSummary(ev) {
     latestAt: latest,
     createdAt: ev.createdAt,
     updatedAt: ev.updatedAt,
-    noteCount: ev.notes?.length || 0,
-    chatCount: ev.chat?.length || 0,
-    researched: Boolean(ev.research?.some((r) => r.status === 'done')),
+    noteCount: me.notes?.length || 0,
+    chatCount: me.chat?.length || 0,
+    researched: Boolean(me.research?.some((r) => r.status === 'done')),
   };
 }
 
@@ -93,13 +192,14 @@ app.get('/api/status', (req, res) => {
     refreshMinutes: config.refreshMinutes,
     feeds: FEEDS.map((f) => ({ name: f.name, lean: f.lean, kind: f.kind })),
     categories: CATEGORIES,
+    user: auth.publicUser(req.user),
     counts: { events: Object.keys(db().events).length, articles: Object.keys(db().articles).length },
   });
 });
 
 app.get('/api/model-check', wrap(async (req, res) => res.json(await checkModel())));
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', adminOnly, (req, res) => {
   const s = db().settings;
   // Only store overrides that differ from the .env defaults, so editing .env later still takes effect.
   const defaults = { model: config.openrouter.model, researchModel: config.openrouter.researchModel || config.openrouter.model };
@@ -120,7 +220,10 @@ app.post('/api/refresh', (req, res) => {
 // ---------- Events ----------
 
 app.get('/api/events', (req, res) => {
-  const events = Object.values(db().events).map(eventSummary).filter((e) => e.articleCount > 0 || e.manual);
+  const events = Object.values(db().events)
+    .filter((e) => canSee(e, req.user.id))
+    .map((e) => eventSummary(e, req.user.id))
+    .filter((e) => e.articleCount > 0 || e.manual);
   res.json({ events, refresh: refreshStatus });
 });
 
@@ -129,8 +232,8 @@ app.post(
   wrap(async (req, res) => {
     const { title = '', description = '', urls = [], autoFind = true } = req.body || {};
     if (!title.trim() && !urls.length) return res.status(400).json({ error: 'Give the event a title or at least one link.' });
-    const ev = await createManualEvent({ title, description, urls: Array.isArray(urls) ? urls : String(urls).split(/\s+/), autoFind });
-    res.json(eventSummary(ev));
+    const ev = await createManualEvent({ title, description, urls: Array.isArray(urls) ? urls : String(urls).split(/\s+/), autoFind, ownerId: req.user.id });
+    res.json(eventSummary(ev, req.user.id));
   })
 );
 
@@ -143,7 +246,7 @@ app.get('/api/events/:id', (req, res) => {
     .filter(Boolean)
     .map(({ text, ...a }) => ({ ...a, hasText: Boolean(text) }))
     .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
-  res.json({ ...eventSummary(ev), articles, notes: ev.notes || [], chat: ev.chat || [], research: ev.research || [], buildErrors: ev.buildErrors || [] });
+  res.json({ ...eventSummary(ev, req.user.id), articles, notes: peek(ev, req.user.id).notes || [], chat: peek(ev, req.user.id).chat || [], research: peek(ev, req.user.id).research || [], buildErrors: ev.buildErrors || [] });
 });
 
 app.patch('/api/events/:id', (req, res) => {
@@ -157,14 +260,16 @@ app.patch('/api/events/:id', (req, res) => {
   }
   if (typeof summary === 'string') ev.summary = summary;
   if (CATEGORIES.includes(category)) ev.category = category;
-  if (typeof pinned === 'boolean') ev.pinned = pinned;
+  if (typeof pinned === 'boolean') mine(ev, req.user.id).pinned = pinned;
   save();
-  res.json(eventSummary(ev));
+  res.json(eventSummary(ev, req.user.id));
 });
 
 app.delete('/api/events/:id', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
+  // Shared news events can only be removed by the admin; your own custom events are yours to remove.
+  if (!ev.ownerId && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the admin can remove shared news events.' });
   const store = db();
   for (const id of ev.articleIds) if (store.articles[id]?.eventId === ev.id) store.articles[id].eventId = 'dismissed';
   delete store.events[ev.id];
@@ -179,7 +284,7 @@ app.post(
     if (!ev) return;
     if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use AI features.' });
     await checkEvent(ev);
-    res.json(eventSummary(ev));
+    res.json(eventSummary(ev, req.user.id));
   })
 );
 
@@ -191,7 +296,7 @@ app.post(
     if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use AI features.' });
     await summarize(ev);
     save();
-    res.json(eventSummary(ev));
+    res.json(eventSummary(ev, req.user.id));
   })
 );
 
@@ -200,7 +305,7 @@ app.post('/api/events/:id/find', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
   if (!startFindCoverage(ev)) return res.status(409).json({ error: 'Already searching for coverage.' });
-  res.json(eventSummary(ev));
+  res.json(eventSummary(ev, req.user.id));
 });
 
 // Articles
@@ -243,8 +348,7 @@ app.post(
         note.linkError = e.message;
       }
     }
-    ev.notes = ev.notes || [];
-    ev.notes.push(note);
+    mine(ev, req.user.id).notes.push(note);
     save();
     res.json(note);
   })
@@ -253,7 +357,7 @@ app.post(
 app.patch('/api/events/:id/notes/:nid', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
-  const note = ev.notes?.find((n) => n.id === req.params.nid);
+  const note = mine(ev, req.user.id).notes.find((n) => n.id === req.params.nid);
   if (!note) return res.status(404).json({ error: 'Note not found' });
   for (const k of ['label', 'text']) if (typeof req.body[k] === 'string') note[k] = req.body[k];
   note.updatedAt = new Date().toISOString();
@@ -264,7 +368,8 @@ app.patch('/api/events/:id/notes/:nid', (req, res) => {
 app.delete('/api/events/:id/notes/:nid', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
-  ev.notes = (ev.notes || []).filter((n) => n.id !== req.params.nid);
+  const m = mine(ev, req.user.id);
+  m.notes = m.notes.filter((n) => n.id !== req.params.nid);
   save();
   res.json({ ok: true });
 });
@@ -275,15 +380,16 @@ app.post(
   wrap(async (req, res) => {
     const ev = getEvent(req, res);
     if (!ev) return;
-    if (ev.research?.some((r) => r.status === 'running')) return res.status(409).json({ error: 'A deep dive is already running.' });
-    res.json(await runDeepDive(ev.id, { focus: req.body?.focus || '', articleId: req.body?.articleId || null, evidence: req.body?.evidence !== false }));
+    if (peek(ev, req.user.id).research?.some((r) => r.status === 'running')) return res.status(409).json({ error: 'A deep dive is already running.' });
+    res.json(await runDeepDive(ev.id, { focus: req.body?.focus || '', articleId: req.body?.articleId || null, evidence: req.body?.evidence !== false, userId: req.user.id }));
   })
 );
 
 app.delete('/api/events/:id/research/:rid', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
-  ev.research = (ev.research || []).filter((r) => r.id !== req.params.rid);
+  const m = mine(ev, req.user.id);
+  m.research = m.research.filter((r) => r.id !== req.params.rid);
   save();
   res.json({ ok: true });
 });
@@ -300,7 +406,7 @@ app.post('/api/events/:id/chat', async (req, res) => {
   res.on('close', () => ctrl.abort());
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   try {
-    await streamChat(ev.id, message, { onToken: (t) => send({ t }), onStatus: (status) => send({ status }), onSources: (sources) => send({ sources }), signal: ctrl.signal, web: req.body?.web !== false });
+    await streamChat(ev.id, message, { onToken: (t) => send({ t }), onStatus: (status) => send({ status }), onSources: (sources) => send({ sources }), signal: ctrl.signal, web: req.body?.web !== false, userId: req.user.id });
     send({ done: true });
   } catch (e) {
     if (!ctrl.signal.aborted) send({ error: e.message });
@@ -311,17 +417,17 @@ app.post('/api/events/:id/chat', async (req, res) => {
 app.delete('/api/events/:id/chat', (req, res) => {
   const ev = getEvent(req, res);
   if (!ev) return;
-  ev.chat = [];
+  mine(ev, req.user.id).chat = [];
   save();
   res.json({ ok: true });
 });
 
 // ---------- Assistant (general chat that can propose actions) ----------
 
-app.get('/api/assistant', (req, res) => res.json({ messages: assistantMessages() }));
+app.get('/api/assistant', (req, res) => res.json({ messages: assistantMessages(req.user.id) }));
 
 app.delete('/api/assistant', (req, res) => {
-  clearAssistant();
+  clearAssistant(req.user.id);
   res.json({ ok: true });
 });
 
@@ -334,7 +440,7 @@ app.post('/api/assistant', async (req, res) => {
   res.on('close', () => ctrl.abort());
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   try {
-    await streamAssistant(message, {
+    await streamAssistant(req.user.id, message, {
       fileIds: Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String).slice(0, 6) : [],
       onToken: (t) => send({ t }),
       onStatus: (status) => send({ status }),
@@ -357,7 +463,7 @@ app.post(
     const name = String(req.query.name || 'file').slice(0, 200);
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'The file is empty.' });
     try {
-      res.json(await addAssistantFile(name, req.body));
+      res.json(await addAssistantFile(req.user.id, name, req.body));
     } catch (e) {
       res.status(400).json({ error: `${name}: ${e.message}` });
     }
@@ -368,7 +474,7 @@ app.post(
 app.post(
   '/api/assistant/act',
   wrap(async (req, res) => {
-    res.json(await actOnProposal(Number(req.body?.index), req.body?.accept === true));
+    res.json(await actOnProposal(req.user.id, Number(req.body?.index), req.body?.accept === true));
   })
 );
 
@@ -408,6 +514,7 @@ const server = app.listen(config.port, async () => {
   if (process.env.NO_AUTO_REFRESH !== '1') {
     refresh();
     if (config.refreshMinutes > 0) setInterval(() => refresh(), config.refreshMinutes * 60e3);
+    setInterval(() => auth.pruneAuth(), 6 * 3600e3);
   }
 });
 

@@ -26,6 +26,14 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.auth && !path.startsWith('/api/auth/')) {
+    // Session ended (or never started): show the login screen.
+    if (state.user) {
+      state.user = null;
+      route();
+    }
+    throw new Error('Please log in.');
+  }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -185,6 +193,9 @@ function route() {
   askObserver?.disconnect();
   $('#chatFab')?.classList.remove('show');
   const hash = location.hash || '#/';
+  document.body.classList.toggle('signed-out', !state.user);
+  if (!state.user) return renderAuth(hash);
+  if (hash.startsWith('#/reset/')) return (location.hash = '#/');
   const m = hash.match(/^#\/event\/([\w-]+)/);
   window.scrollTo(0, 0);
   document.body.classList.toggle('on-assistant', hash.startsWith('#/assistant'));
@@ -451,7 +462,7 @@ function paintHero() {
         <button class="btn" data-act="pin">${icons.pin} ${ev.pinned ? 'Unpin' : 'Pin'}</button>
         <button class="btn" data-act="rename">${icons.edit} Rename</button>
         ${state.status?.llm && ev.articleCount ? `<button class="btn" data-act="resummarize">${icons.sparkle} Refresh summary</button>` : ''}
-        <button class="btn ghost danger" data-act="delete">${icons.trash} Remove</button>
+        ${ev.private || state.user?.role === 'admin' ? `<button class="btn ghost danger" data-act="delete">${icons.trash} Remove</button>` : ''}
       </div>
     </div>`;
   $('#hero').onclick = heroAction;
@@ -1326,17 +1337,21 @@ function newEventModal() {
 
 async function settingsModal() {
   const st = (state.status = await api('/api/status'));
+  const isAdmin = state.user?.role === 'admin';
+  const account = await accountSectionHTML();
   const report = st.refresh.lastReport || [];
   const feedStatus = (name) => report.find((r) => r.source === name);
   openModal(
     `<h2>Settings</h2>
      <p class="lede">${st.llm ? 'Connected to OpenRouter.' : 'No OpenRouter key found — AI features are off.'} Auto-refresh every ${st.refreshMinutes} min.</p>
-     <form id="settingsForm" style="display:grid;gap:14px">
+     ${account}
+     <form id="settingsForm" style="display:${isAdmin ? 'grid' : 'none'};gap:14px">
        <label class="field">Model <span class="hint">Used for grouping and summaries (OpenRouter model id)</span><input class="input" name="model" value="${esc(st.model)}"></label>
        <label class="field">Deep dive & chat model <span class="hint">Leave the same, or pick a stronger model for research</span><input class="input" name="researchModel" value="${esc(st.researchModel)}"></label>
        <div id="modelCheck" class="muted" style="font-size:13px"></div>
        <div class="modal-actions" style="justify-content:space-between"><button type="button" class="btn" id="checkModel">Check model</button><span style="display:flex;gap:8px"><button type="button" class="btn ghost" data-close>Close</button><button class="btn primary" type="submit">Save</button></span></div>
      </form>
+     ${isAdmin ? '' : '<div class="modal-actions"><button type="button" class="btn ghost" data-close>Close</button></div>'}
      <div>
        <p class="section-label">News sources</p>
        <div class="feed-list">${st.feeds
@@ -1349,6 +1364,7 @@ async function settingsModal() {
        <p class="muted" style="font-size:12px;margin-top:10px">Deep dives also search GDELT, Google News and Wikipedia, preferring AP, Reuters, AFP, BBC, NPR, PBS and other wire services and public broadcasters.</p>
      </div>`,
     (root) => {
+      bindAccountSection(root);
       $('#settingsForm', root).addEventListener('submit', async (e) => {
         e.preventDefault();
         const f = e.target;
@@ -1431,5 +1447,179 @@ $('#search').addEventListener('input', (e) => {
     else renderHomeGrid();
   }, 150);
 });
+
+// ---------- Accounts ----------
+
+async function renderAuth(hash = location.hash) {
+  clearInterval(state.pollTimer);
+  document.title = 'OpenFrame News';
+  const info = (state.auth = await fetch('/api/auth/me').then((r) => r.json()).catch(() => ({})));
+  if (info.user) {
+    state.user = info.user;
+    return route();
+  }
+  const resetToken = (hash.match(/^#\/reset\/([\w-]+)/) || [])[1];
+  let mode = resetToken ? 'reset' : info.setup ? 'signup' : 'login';
+  const paint = (notice = '') => {
+    const f = (label, name, type, extra = '') => `<label class="field">${label}<input class="input" name="${name}" type="${type}" required ${extra}></label>`;
+    const forms = {
+      login: {
+        h: 'Log in',
+        sub: 'Welcome back.',
+        body: f('Email', 'email', 'email', 'autocomplete="username"') + f('Password', 'password', 'password', 'autocomplete="current-password"'),
+        go: 'Log in',
+        links: `<button type="button" data-mode="forgot">Forgot your password?</button>${info.signupOpen ? '<button type="button" data-mode="signup">Create an account</button>' : ''}`,
+      },
+      signup: {
+        h: info.setup ? 'Create the first account' : 'Create an account',
+        sub: info.setup ? 'This first account becomes the admin, who can invite other people.' : 'You need the invite code from the person who runs this site.',
+        body:
+          f('Your name', 'name', 'text', 'autocomplete="name" maxlength="60"') +
+          f('Email', 'email', 'email', 'autocomplete="username"') +
+          f('Password <span class="hint">At least 8 characters</span>', 'password', 'password', 'autocomplete="new-password" minlength="8"') +
+          (info.needsCode ? f('Invite code', 'code', 'text', 'autocomplete="off"') : ''),
+        go: 'Create account',
+        links: info.setup ? '' : '<button type="button" data-mode="login">I already have an account</button>',
+      },
+      forgot: {
+        h: 'Reset your password',
+        sub: info.emailReset ? 'Enter your email and we’ll send you a link to choose a new password.' : 'Email isn’t set up on this site yet. Ask the person who runs it to send you a reset link.',
+        body: info.emailReset ? f('Email', 'email', 'email', 'autocomplete="username"') : '',
+        go: info.emailReset ? 'Send reset link' : '',
+        links: '<button type="button" data-mode="login">Back to log in</button>',
+      },
+      reset: {
+        h: 'Choose a new password',
+        sub: 'You’ll be logged in right after.',
+        body: f('New password <span class="hint">At least 8 characters</span>', 'password', 'password', 'autocomplete="new-password" minlength="8"'),
+        go: 'Save password',
+        links: '<button type="button" data-mode="login">Back to log in</button>',
+      },
+    }[mode];
+    app.innerHTML = `<div class="auth"><div class="auth-card">
+      <h1>${forms.h}</h1><p class="muted">${forms.sub}</p>
+      ${notice ? `<div class="notice">${esc(notice)}</div>` : ''}
+      <form id="authForm">${forms.body}<div class="auth-error" id="authError" role="alert"></div>${forms.go ? `<button class="btn primary" type="submit">${forms.go}</button>` : ''}</form>
+      <div class="auth-links">${forms.links}</div>
+    </div></div>`;
+    $('.auth-links').onclick = (e) => {
+      const b = e.target.closest('[data-mode]');
+      if (!b) return;
+      mode = b.dataset.mode;
+      if (resetToken && mode === 'login') history.replaceState(null, '', '#/');
+      paint();
+    };
+    $('#authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(e.target));
+      if (mode === 'reset') body.token = resetToken;
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const r = await api(`/api/auth/${mode}`, { method: 'POST', body });
+        if (mode === 'forgot') {
+          mode = 'login';
+          return paint('If that email has an account, a reset link is on its way. It expires in an hour.');
+        }
+        state.user = r.user;
+        if (location.hash.startsWith('#/reset/')) history.replaceState(null, '', '#/');
+        route();
+      } catch (err) {
+        $('#authError').textContent = err.message;
+        btn.disabled = false;
+      }
+    });
+    app.querySelector('input')?.focus();
+  };
+  paint();
+}
+
+async function logout() {
+  await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  state.user = null;
+  state.events = [];
+  state.event = null;
+  assist.messages = [];
+  assist.files = [];
+  if (modal.open) modal.close();
+  location.hash = '#/';
+  route();
+}
+
+async function accountSectionHTML() {
+  const u = state.user;
+  let admin = '';
+  if (u.role === 'admin') {
+    const a = await api('/api/admin/users');
+    admin = `<div class="acct-box">
+      <p class="section-label">People</p>
+      <label class="field">Invite code <span class="hint">New people need this to create an account. Leave empty to close sign-ups.</span>
+        <span style="display:flex;gap:8px"><input class="input" id="inviteCode" value="${esc(a.inviteCode)}" placeholder="No code set: sign-ups are closed" style="flex:1;min-width:0"><button type="button" class="btn" id="saveInvite">Save</button></span></label>
+      <div class="user-list">${a.users
+        .map(
+          (x) => `<div class="user-row"><span><b>${esc(x.name)}</b>${x.role === 'admin' ? ' <span class="tag-neutral">ADMIN</span>' : ''}<br><span class="muted">${esc(x.email)}</span></span>
+          <span class="user-tools"><button type="button" class="btn sm" data-reset-link="${x.id}">Reset link</button>${x.id === u.id ? '' : `<button type="button" class="btn sm ghost danger" data-remove-user="${x.id}" data-name="${esc(x.name)}">Remove</button>`}</span></div>`
+        )
+        .join('')}</div>
+      <div id="resetLinkOut"></div>
+      <p class="muted" style="font-size:12px;margin:0">${a.emailReset ? 'Password reset emails are on.' : 'Password reset emails are off (no SMTP settings in .env). Use “Reset link” and send the link yourself.'}</p>
+    </div>`;
+  }
+  return `<div class="acct-box">
+      <p class="section-label">Your account</p>
+      <div class="user-row"><span><b>${esc(u.name)}</b><br><span class="muted">${esc(u.email)}</span></span><button type="button" class="btn sm" id="logoutBtn">Log out</button></div>
+      <details class="more"><summary>Change password</summary>
+        <form id="pwForm" style="display:grid;gap:10px;margin-top:10px">
+          <input class="input" name="current" type="password" placeholder="Current password" autocomplete="current-password" required>
+          <input class="input" name="password" type="password" placeholder="New password (at least 8 characters)" autocomplete="new-password" minlength="8" required>
+          <div><button class="btn" type="submit">Change password</button></div>
+        </form>
+      </details>
+    </div>${admin}`;
+}
+
+function bindAccountSection(root) {
+  $('#logoutBtn', root).addEventListener('click', logout);
+  $('#pwForm', root).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/auth/password', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) });
+      e.target.reset();
+      toast('Password changed');
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $('#saveInvite', root)?.addEventListener('click', async () => {
+    try {
+      await api('/api/admin/invite', { method: 'PUT', body: { code: $('#inviteCode', root).value } });
+      toast('Invite code saved');
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  root.querySelector('.user-list')?.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    try {
+      if (b.dataset.resetLink) {
+        const { link } = await api(`/api/admin/users/${b.dataset.resetLink}/reset-link`, { method: 'POST' });
+        $('#resetLinkOut', root).innerHTML = `<label class="field">One-time reset link (works for 1 hour) <input class="input" readonly value="${esc(link)}" onfocus="this.select()"></label>`;
+        navigator.clipboard?.writeText(link).then(() => toast('Reset link copied'), () => {});
+      } else if (b.dataset.removeUser) {
+        if (b.dataset.sure !== '1') {
+          b.dataset.sure = '1';
+          b.textContent = 'Really remove?';
+          return;
+        }
+        await api(`/api/admin/users/${b.dataset.removeUser}`, { method: 'DELETE' });
+        b.closest('.user-row').remove();
+        toast(`Removed ${b.dataset.name}`);
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+}
 
 route();

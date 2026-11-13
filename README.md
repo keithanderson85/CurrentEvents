@@ -20,6 +20,7 @@ _Screenshots use fictional sample data and placeholder images from the offline t
 - **Evidence, not just news.** Each deep dive pulls out the key factual claims and checks them against primary sources: research papers (OpenAlex, Crossref, Europe PMC), government records (US Federal Register, GOV.UK), government and international-body sites (.gov, WHO, UN, EU, World Bank, OECD, IMF) and fact-checkers (PolitiFact, FactCheck.org, Snopes, Full Fact). The briefing gets an **Evidence check** (Supported / Partly supported / Contradicted / Unverified per claim) and sources are labelled Study, Government, Official body or Fact-check. Untick the box to skip it.
 - **Chat that can search the web.** When a question goes beyond the event's articles, the chat searches news, Wikipedia, research papers and fact-checkers, reads the top results and cites them as W1, W2… with links.
 - **Assistant.** A general chat (the Assistant button in the header) for anything, news or not. It searches the web when needed and reads links and files you paste, attach or drop in (PDF, Word .docx, text, Markdown, CSV, JSON; up to 25 MB). Files added to an event are saved as notes. Ask it to find out about a story and it offers to create an event for it, add your links to an event, or run a deep dive. It always shows a confirmation card first and does nothing until you confirm.
+- **Accounts.** People log in with email and password. The first account is the admin; everyone else needs the admin's invite code. Automatic news events and reality checks are shared by everyone. Custom events, notes, chats, deep dives, pins and the Assistant belong to the account that made them and nobody else sees them. Passwords can be reset by email (if SMTP is set up) or with a one-time link the admin creates in Settings.
 - **Notes & custom data.** Add labelled notes, pasted data or links (links are read automatically). Everything you add is used by chat and deep dives.
 - **Chat with an event.** Streaming chat that knows the event's articles, your notes and the latest briefing, and cites them.
 - Pin, rename, remove events; add or remove articles; search and filter by category; light and dark mode; works on mobile.
@@ -96,6 +97,7 @@ src/cluster.js       AI grouping into events (keyword fallback without a key)
 src/refresh.js       Fetch → group → fill missing images (og:image) → prune
 src/research.js      Deep dive: plan searches, search, read, write cited briefing
 src/manual.js        User-created topic events: search, AI relevance check, tracking
+src/auth.js          Accounts, sessions, password reset, per-person data
 src/assistant.js     Assistant chat: routes requests, proposes actions, acts on confirmation
 src/check.js         Automatic reality check: verdict, confirmed vs claimed, spin
 src/evidence.js      Primary sources: research papers, government records, official sites, fact-checkers
