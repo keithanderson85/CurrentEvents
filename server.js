@@ -88,7 +88,7 @@ app.post(
   '/api/auth/forgot',
   authWrap('forgot', async (req, res) => {
     const user = auth.findUserByEmail(req.body?.email);
-    if (user && auth.emailEnabled()) {
+    if (user && auth.emailEnabled() && auth.isEmail(user.email)) {
       const link = `${siteUrl(req)}/#/reset/${auth.createResetToken(user.id)}`;
       auth.sendResetEmail(user, link).catch((e) => console.log('[auth] could not send reset email:', e.message));
     }

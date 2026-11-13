@@ -58,7 +58,8 @@ const sameText = (a, b) => crypto.timingSafeEqual(Buffer.from(sha(String(a))), B
 export async function signup({ email, name, password, code }) {
   const s = tables();
   email = normEmail(email);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new Error('Enter a valid email address.');
+  // A username is fine; an email address is only needed for password reset emails.
+  if (!/^[^\s]{3,200}$/.test(email)) throw new Error('Choose a username (or email) of at least 3 characters, with no spaces.');
   checkPassword(password);
   const first = userCount() === 0;
   const given = String(code || '').trim();
@@ -70,7 +71,7 @@ export async function signup({ email, name, password, code }) {
     if (!need) throw new Error('Sign-ups are closed. Ask the person who runs this site for an invite code.');
     if (!sameText(given, need)) throw new Error('That invite code isn’t right.');
   }
-  if (byEmail(email)) throw new Error('There is already an account with that email. Try logging in.');
+  if (byEmail(email)) throw new Error('That username or email is already taken. Try logging in.');
   const user = {
     id: newId('u_'),
     email,
@@ -113,7 +114,7 @@ export async function login({ email, password }) {
   let ok = false;
   if (user) ok = await verifyPassword(String(password || ''), user.pass);
   else await hashPassword('x');
-  if (!ok) throw new Error('Wrong email or password.');
+  if (!ok) throw new Error('Wrong username or password.');
   return user;
 }
 
@@ -210,6 +211,7 @@ export function removeUser(id) {
 
 // ---------- Email ----------
 
+export const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || ''));
 export const emailEnabled = () => Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 export async function sendResetEmail(user, link) {
   const nodemailer = (await import('nodemailer')).default;

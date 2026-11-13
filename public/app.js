@@ -1466,7 +1466,7 @@ async function renderAuth(hash = location.hash) {
       login: {
         h: 'Log in',
         sub: 'Welcome back.',
-        body: f('Email', 'email', 'email', 'autocomplete="username"') + f('Password', 'password', 'password', 'autocomplete="current-password"'),
+        body: f('Username or email', 'email', 'text', 'autocomplete="username" autocapitalize="none"') + f('Password', 'password', 'password', 'autocomplete="current-password"'),
         go: 'Log in',
         links: `<button type="button" data-mode="forgot">Forgot your password?</button>${info.signupOpen ? '<button type="button" data-mode="signup">Create an account</button>' : ''}`,
       },
@@ -1475,7 +1475,7 @@ async function renderAuth(hash = location.hash) {
         sub: info.setup ? 'This first account becomes the admin, who can invite other people.' : 'You need the invite code from the person who runs this site.',
         body:
           f('Your name', 'name', 'text', 'autocomplete="name" maxlength="60"') +
-          f('Email', 'email', 'email', 'autocomplete="username"') +
+          f('Username or email <span class="hint">An email is only needed if you want password reset emails</span>', 'email', 'text', 'autocomplete="username" autocapitalize="none" minlength="3"') +
           f('Password <span class="hint">At least 8 characters</span>', 'password', 'password', 'autocomplete="new-password" minlength="8"') +
           (info.needsCode ? f('Invite code', 'code', 'text', 'autocomplete="off"') : ''),
         go: 'Create account',
