@@ -12,24 +12,66 @@ import { mine, canSee } from './auth.js';
 // your data (new event, adding links, starting a deep dive) is only *proposed*: you get a
 // card and nothing happens until you confirm.
 
-// Each person has their own conversation and files.
-const thread = (uid) => {
+// Each person has their own list of conversations; each conversation has its own files.
+function book(uid) {
   const store = db();
   store.assistants = store.assistants || {};
-  return (store.assistants[uid] = store.assistants[uid] || { messages: [] });
-};
-export const assistantMessages = (uid) => thread(uid).messages;
-export function clearAssistant(uid) {
-  thread(uid).messages = [];
-  thread(uid).files = {};
+  const b = (store.assistants[uid] = store.assistants[uid] || {});
+  if (!b.chats) {
+    // Older data held one conversation per person: keep it as the first chat.
+    b.chats = {};
+    if (b.messages?.length) {
+      const id = newId('c_');
+      const first = b.messages.find((m) => m.role === 'user');
+      b.chats[id] = { id, title: titleFrom(first?.content), messages: b.messages, files: b.files || {}, createdAt: b.messages[0]?.ts || new Date().toISOString(), updatedAt: b.messages.at(-1)?.ts || new Date().toISOString() };
+    }
+    Reflect.deleteProperty(b, 'messages');
+    Reflect.deleteProperty(b, 'files');
+  }
+  return b;
+}
+const titleFrom = (text) => truncate(String(text || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim(), 48) || 'New chat';
+
+export function listChats(uid) {
+  return Object.values(book(uid).chats)
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length }));
+}
+export function createChat(uid) {
+  const b = book(uid);
+  // Reuse an empty chat rather than piling up blanks.
+  const empty = Object.values(b.chats).find((c) => !c.messages.length);
+  if (empty) return empty;
+  const now = new Date().toISOString();
+  const c = { id: newId('c_'), title: 'New chat', messages: [], files: {}, createdAt: now, updatedAt: now };
+  b.chats[c.id] = c;
+  save();
+  return c;
+}
+export function getChat(uid, cid) {
+  const c = book(uid).chats[cid];
+  if (!c) throw Object.assign(new Error('That chat no longer exists.'), { status: 404 });
+  return c;
+}
+export function renameChat(uid, cid, title) {
+  const c = getChat(uid, cid);
+  c.title = truncate(String(title || '').trim(), 80) || c.title;
+  c.titleLocked = true;
+  save();
+  return c;
+}
+export function removeChat(uid, cid) {
+  Reflect.deleteProperty(book(uid).chats, cid);
   save();
 }
+const thread = (uid, cid) => getChat(uid, cid);
+export const assistantMessages = (uid, cid) => thread(uid, cid).messages;
 
 // Files are stored as extracted text only (the original bytes are not kept).
 const FILE_KEEP_CHARS = 120000;
-export async function addAssistantFile(uid, name, buf) {
+export async function addAssistantFile(uid, cid, name, buf) {
   const { text, pages } = await extractFile(name, buf);
-  const t = thread(uid);
+  const t = thread(uid, cid);
   t.files = t.files || {};
   const id = newId('f_');
   t.files[id] = { id, name, text: text.slice(0, FILE_KEEP_CHARS), chars: text.length, pages: pages || null, ts: new Date().toISOString() };
@@ -39,7 +81,7 @@ export async function addAssistantFile(uid, name, buf) {
   save();
   return { id, name, chars: text.length, pages: pages || null, truncated: text.length > FILE_KEEP_CHARS };
 }
-const fileById = (uid, id) => thread(uid).files?.[id];
+const fileById = (uid, cid, id) => thread(uid, cid).files?.[id];
 
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 const ACTIONS = ['none', 'search', 'create_event', 'add_to_event', 'deep_dive'];
@@ -112,8 +154,8 @@ const describe = (pr) =>
     : `run a deep dive on the existing event "${pr.eventTitle}"${pr.focus ? ` focused on ${pr.focus}` : ''}`;
 
 // Save an attached file's text on an event as a note, so chat and deep dives can use it.
-function fileNote(uid, ev, f) {
-  const file = fileById(uid, f.id);
+function fileNote(uid, cid, ev, f) {
+  const file = fileById(uid, cid, f.id);
   if (!file) return false;
   mine(ev, uid).notes.push({ id: newId('n_'), label: `File: ${file.name}`.slice(0, 60), text: truncate(file.text, 6000), url: '', createdAt: new Date().toISOString() });
   return true;
@@ -126,9 +168,9 @@ const SYSTEM = () => `You are the assistant inside OpenFrame News, a personal ne
 - You cannot change anything in the app yourself. When a PROPOSED ACTION is listed, the user sees a card with Confirm and Cancel buttons below your reply. Say in one sentence what the action would do and ask them to confirm. Never say it has been done.
 - If no action is proposed and the user wants one, tell them what you can do: follow a story as a new event, add links or files to an event, or run a deep dive on an event.`;
 
-export async function streamAssistant(uid, message, { onToken, onStatus = () => {}, onSources = () => {}, onProposal = () => {}, signal, fileIds = [] }) {
-  const t = thread(uid);
-  const fileOf = (id) => fileById(uid, id);
+export async function streamAssistant(uid, cid, message, { onToken, onStatus = () => {}, onSources = () => {}, onProposal = () => {}, signal, fileIds = [] }) {
+  const t = thread(uid, cid);
+  const fileOf = (id) => fileById(uid, cid, id);
   const history = t.messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
   const files = fileIds.map(fileOf).filter(Boolean);
   // Files from earlier in this conversation stay available for follow-up questions.
@@ -137,6 +179,8 @@ export async function streamAssistant(uid, message, { onToken, onStatus = () => 
     .map((f) => fileOf(f.id))
     .filter((f) => f && !files.includes(f))
     .slice(-2);
+  if (!t.titleLocked && !t.messages.some((m) => m.role === 'user')) t.title = titleFrom(message) === 'New chat' && files.length ? truncate(files[0].name, 48) : titleFrom(message);
+  t.updatedAt = new Date().toISOString();
   t.messages.push({ role: 'user', content: message, ts: new Date().toISOString(), ...(files.length ? { files: files.map((f) => ({ id: f.id, name: f.name })) } : {}) });
   save();
 
@@ -198,8 +242,8 @@ export async function streamAssistant(uid, message, { onToken, onStatus = () => 
 }
 
 // Carry out (or decline) the proposal attached to a message. Only ever called from the user's click.
-export async function actOnProposal(uid, index, accept) {
-  const t = thread(uid);
+export async function actOnProposal(uid, cid, index, accept) {
+  const t = thread(uid, cid);
   const msg = t.messages[index];
   const pr = msg?.proposal;
   if (!pr) throw new Error('That suggestion is no longer available.');
@@ -213,7 +257,7 @@ export async function actOnProposal(uid, index, accept) {
   if (pr.type === 'create_event') {
     const ev = await createManualEvent({ title: pr.title, description: pr.description || '', urls: pr.urls || [], autoFind: true, ownerId: uid });
     pr.eventId = ev.id;
-    for (const f of pr.files || []) fileNote(uid, ev, f);
+    for (const f of pr.files || []) fileNote(uid, cid, ev, f);
     note = `Done. I created **${ev.title}** and I'm gathering coverage for it now. It will keep tracking new articles.`;
   } else {
     const ev = db().events[pr.eventId];
@@ -221,7 +265,7 @@ export async function actOnProposal(uid, index, accept) {
     if (pr.type === 'add_to_event') {
       const results = await mapLimit(pr.urls || [], 3, (u) => addArticleToEvent(ev, u));
       const ok = results.filter((r) => r && !r.error).length;
-      const saved = (pr.files || []).filter((f) => fileNote(uid, ev, f)).length;
+      const saved = (pr.files || []).filter((f) => fileNote(uid, cid, ev, f)).length;
       const parts = [pr.urls?.length ? `${ok} of ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'}` : '', saved ? `${saved} file${saved === 1 ? '' : 's'} (as notes)` : ''].filter(Boolean);
       note = `Done. I added ${parts.join(' and ') || 'nothing'} to **${ev.title}**.`;
     } else {

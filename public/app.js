@@ -1051,7 +1051,7 @@ async function sendChat(message) {
 // ---------- Assistant (general chat that can propose actions) ----------
 
 const ASSIST_SUGGESTIONS = ['What are the biggest stories today, in plain words?', 'Find out about a story and follow it for me: ', 'Which of today’s stories look shaky or disputed?', 'Explain how a recount works'];
-const assist = { messages: [], busy: false, files: [] };
+const assist = { messages: [], busy: false, files: [], chats: [], chatId: null };
 const FILE_ACCEPT = '.pdf,.docx,.txt,.md,.json,.csv,.tsv,.log,.html,.xml,.yaml,.yml,.rtf';
 
 async function uploadAssistFiles(fileList, repaint) {
@@ -1064,7 +1064,7 @@ async function uploadAssistFiles(fileList, repaint) {
     assist.files.push(chip);
     repaint();
     try {
-      const res = await fetch(`/api/assistant/files?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      const res = await fetch(`/api/assistant/files?chat=${assist.chatId}&name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Could not read ${f.name}`);
       Object.assign(chip, data, { loading: false });
@@ -1120,11 +1120,41 @@ async function renderAssistant() {
   document.title = 'Assistant · OpenFrame News';
   if (!state.status) state.status = await api('/api/status').catch(() => null);
   const llm = state.status?.llm;
+  // Which conversation? #/assistant/<id>, else the most recent, else a new one.
+  const wanted = (location.hash.match(/^#\/assistant\/([\w-]+)/) || [])[1];
+  try {
+    assist.chats = (await api('/api/assistant')).chats;
+    let id = assist.chats.find((c) => c.id === wanted)?.id || (!wanted && assist.chats[0]?.id);
+    if (!id) {
+      id = (await api('/api/assistant/chats', { method: 'POST' })).id;
+      assist.chats = (await api('/api/assistant')).chats;
+    }
+    if (assist.chatId !== id) assist.files = [];
+    assist.chatId = id;
+    assist.messages = (await api(`/api/assistant/chats/${id}`)).messages;
+    if (wanted !== id) history.replaceState(null, '', `#/assistant/${id}`);
+  } catch (err) {
+    if (!state.user) return;
+    toast(err.message);
+  }
+  const chatListHTML = () =>
+    assist.chats
+      .map(
+        (c) => `<div class="chat-item ${c.id === assist.chatId ? 'on' : ''}"><a href="#/assistant/${c.id}" title="${esc(c.title)}">${esc(c.title)}</a>
+          <button type="button" data-rename-chat="${c.id}" title="Rename" aria-label="Rename chat">${icons.edit}</button><button type="button" data-del-chat="${c.id}" title="Delete" aria-label="Delete chat">${icons.trash}</button></div>`
+      )
+      .join('');
   app.innerHTML = `
+    <div class="assist-wrap">
+    <aside class="assist-side" id="assistSide">
+      <button class="btn primary" id="newChat" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg> New chat</button>
+      <div class="chat-list" id="chatList">${chatListHTML()}</div>
+    </aside>
     <div class="assist">
       <div class="assist-head">
-        <a class="back" href="#/">${icons.back || '‹'} All events</a>
-        <button class="btn sm ghost" id="assistClear" title="Start a new conversation">${icons.trash} Clear</button>
+        <button class="btn sm" id="chatsToggle" type="button">${icons.chat} Chats</button>
+        <span class="assist-title" id="assistTitle">${esc(assist.chats.find((c) => c.id === assist.chatId)?.title || '')}</span>
+        <a class="back" href="#/">${icons.back} All events</a>
       </div>
       <div class="assist-log" id="assistLog"></div>
       ${
@@ -1132,11 +1162,58 @@ async function renderAssistant() {
           ? `<form class="chat-form assist-form" id="assistForm"><div class="assist-attach" id="assistAttach"></div><button class="btn icon ghost" type="button" id="assistFileBtn" title="Attach a file (PDF, Word, text, JSON)" aria-label="Attach a file">${icons.clip}</button><input type="file" id="assistFile" hidden multiple accept="${FILE_ACCEPT}" /><textarea class="input" name="m" rows="1" placeholder="${isNarrow() ? 'Ask anything or paste links…' : 'Ask anything, give me a task, or drop links and files here…'}"></textarea><button class="btn primary icon" type="submit" aria-label="Send">${icons.send}</button></form>`
           : `<div class="chat-disabled">Add an OpenRouter API key to use the assistant.</div>`
       }
+    </div>
     </div>`;
   const log = $('#assistLog');
-  try {
-    assist.messages = (await api('/api/assistant')).messages;
-  } catch {}
+  const refreshList = async () => {
+    assist.chats = (await api('/api/assistant')).chats;
+    if ($('#chatList')) $('#chatList').innerHTML = chatListHTML();
+    if ($('#assistTitle')) $('#assistTitle').textContent = assist.chats.find((c) => c.id === assist.chatId)?.title || '';
+  };
+  assist.refreshList = refreshList;
+  $('#chatsToggle').addEventListener('click', () => $('#assistSide').classList.toggle('open'));
+  $('#newChat').addEventListener('click', async () => {
+    const c = await api('/api/assistant/chats', { method: 'POST' });
+    location.hash = `#/assistant/${c.id}`;
+    if (c.id === assist.chatId) $('#assistSide').classList.remove('open');
+  });
+  $('#chatList').addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    e.preventDefault();
+    try {
+      if (b.dataset.renameChat) {
+        const cur = assist.chats.find((c) => c.id === b.dataset.renameChat);
+        const row = b.closest('.chat-item');
+        row.innerHTML = `<input class="input" value="${esc(cur.title)}" maxlength="80" aria-label="Chat name">`;
+        const inp = row.querySelector('input');
+        inp.focus();
+        inp.select();
+        const done = async (keep) => {
+          inp.onblur = null;
+          if (keep && inp.value.trim() && inp.value.trim() !== cur.title) await api(`/api/assistant/chats/${cur.id}`, { method: 'PATCH', body: { title: inp.value } });
+          refreshList();
+        };
+        inp.onkeydown = (ev) => (ev.key === 'Enter' ? done(true) : ev.key === 'Escape' ? done(false) : null);
+        inp.onblur = () => done(true);
+      } else if (b.dataset.delChat) {
+        if (b.dataset.sure !== '1') {
+          b.dataset.sure = '1';
+          b.classList.add('sure');
+          b.title = 'Click again to delete';
+          return toast('Click the bin again to delete this chat');
+        }
+        await api(`/api/assistant/chats/${b.dataset.delChat}`, { method: 'DELETE' });
+        if (b.dataset.delChat === assist.chatId) {
+          assist.chatId = null;
+          location.hash = '#/assistant';
+          if (location.hash === '#/assistant') route();
+        } else refreshList();
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+  });
   const paint = () => {
     log.innerHTML = assistLogHTML();
     log.scrollTop = log.scrollHeight;
@@ -1207,12 +1284,6 @@ async function renderAssistant() {
     grow();
     ta.focus();
   });
-  $('#assistClear').addEventListener('click', async () => {
-    if (assist.busy) return;
-    await api('/api/assistant', { method: 'DELETE' });
-    assist.messages = [];
-    paint();
-  });
   log.addEventListener('click', async (e) => {
     const sug = e.target.closest('[data-suggest]');
     if (sug && ta) {
@@ -1229,7 +1300,7 @@ async function renderAssistant() {
     const index = Number(b.dataset.actYes ?? b.dataset.actNo);
     b.closest('.proposal-actions').innerHTML = `<span class="muted">${yes ? 'Working on it…' : ''}</span>`;
     try {
-      const r = await api('/api/assistant/act', { method: 'POST', body: { index, accept: yes } });
+      const r = await api('/api/assistant/act', { method: 'POST', body: { chatId: assist.chatId, index, accept: yes } });
       assist.messages[index].proposal = r.proposal;
       if (r.message) assist.messages.push(r.message);
     } catch (err) {
@@ -1242,6 +1313,8 @@ async function renderAssistant() {
 
 async function sendAssist(message, paint, files = []) {
   assist.busy = true;
+  const chatId = assist.chatId;
+  const first = !assist.messages.length;
   if (!message && files.length) message = 'Please read the attached file and tell me what it says.';
   assist.messages.push({ role: 'user', content: message, ...(files.length ? { files: files.map((f) => ({ id: f.id, name: f.name })) } : {}) });
   paint();
@@ -1252,7 +1325,7 @@ async function sendAssist(message, paint, files = []) {
   let text = '';
   const extra = {};
   try {
-    const res = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, fileIds: files.map((f) => f.id) }) });
+    const res = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId, fileIds: files.map((f) => f.id) }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed');
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -1278,12 +1351,13 @@ async function sendAssist(message, paint, files = []) {
         }
       }
     }
-    assist.messages.push({ role: 'assistant', content: text, ...extra });
+    if (assist.chatId === chatId) assist.messages.push({ role: 'assistant', content: text, ...extra });
   } catch (err) {
-    assist.messages.push({ role: 'assistant', content: `**Something went wrong:** ${err.message}` });
+    if (assist.chatId === chatId) assist.messages.push({ role: 'assistant', content: `**Something went wrong:** ${err.message}` });
   } finally {
     assist.busy = false;
-    if ($('#assistLog')) paint();
+    if ($('#assistLog') && assist.chatId === chatId) paint();
+    if (first) assist.refreshList?.().catch(() => {});
   }
 }
 

@@ -9,7 +9,7 @@ import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
 import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
 import { checkEvent } from './src/check.js';
-import { streamAssistant, assistantMessages, clearAssistant, actOnProposal, addAssistantFile } from './src/assistant.js';
+import { streamAssistant, actOnProposal, addAssistantFile, listChats, createChat, getChat, renameChat, removeChat } from './src/assistant.js';
 import { MAX_FILE_BYTES } from './src/files.js';
 import * as auth from './src/auth.js';
 import { mine, peek, canSee } from './src/auth.js';
@@ -424,10 +424,31 @@ app.delete('/api/events/:id/chat', (req, res) => {
 
 // ---------- Assistant (general chat that can propose actions) ----------
 
-app.get('/api/assistant', (req, res) => res.json({ messages: assistantMessages(req.user.id) }));
-
-app.delete('/api/assistant', (req, res) => {
-  clearAssistant(req.user.id);
+// Conversations belong to the logged-in account; every lookup goes through that account's own list.
+const chatErr = (res, e) => res.status(e.status || 500).json({ error: e.message });
+app.get('/api/assistant', (req, res) => res.json({ chats: listChats(req.user.id) }));
+app.post('/api/assistant/chats', (req, res) => {
+  const c = createChat(req.user.id);
+  res.json({ id: c.id, title: c.title });
+});
+app.get('/api/assistant/chats/:cid', (req, res) => {
+  try {
+    const c = getChat(req.user.id, req.params.cid);
+    res.json({ id: c.id, title: c.title, messages: c.messages });
+  } catch (e) {
+    chatErr(res, e);
+  }
+});
+app.patch('/api/assistant/chats/:cid', (req, res) => {
+  try {
+    const c = renameChat(req.user.id, req.params.cid, req.body?.title);
+    res.json({ id: c.id, title: c.title });
+  } catch (e) {
+    chatErr(res, e);
+  }
+});
+app.delete('/api/assistant/chats/:cid', (req, res) => {
+  removeChat(req.user.id, req.params.cid);
   res.json({ ok: true });
 });
 
@@ -435,12 +456,18 @@ app.post('/api/assistant', async (req, res) => {
   const message = String(req.body?.message || '').trim() || (req.body?.fileIds?.length ? 'Please read the attached file and tell me what it says.' : '');
   if (!message) return res.status(400).json({ error: 'Empty message' });
   if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use the assistant.' });
+  const cid = String(req.body?.chatId || '');
+  try {
+    getChat(req.user.id, cid);
+  } catch (e) {
+    return chatErr(res, e);
+  }
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   const ctrl = new AbortController();
   res.on('close', () => ctrl.abort());
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   try {
-    await streamAssistant(req.user.id, message, {
+    await streamAssistant(req.user.id, cid, message, {
       fileIds: Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String).slice(0, 6) : [],
       onToken: (t) => send({ t }),
       onStatus: (status) => send({ status }),
@@ -463,7 +490,7 @@ app.post(
     const name = String(req.query.name || 'file').slice(0, 200);
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'The file is empty.' });
     try {
-      res.json(await addAssistantFile(req.user.id, name, req.body));
+      res.json(await addAssistantFile(req.user.id, String(req.query.chat || ''), name, req.body));
     } catch (e) {
       res.status(400).json({ error: `${name}: ${e.message}` });
     }
@@ -474,7 +501,7 @@ app.post(
 app.post(
   '/api/assistant/act',
   wrap(async (req, res) => {
-    res.json(await actOnProposal(req.user.id, Number(req.body?.index), req.body?.accept === true));
+    res.json(await actOnProposal(req.user.id, String(req.body?.chatId || ''), Number(req.body?.index), req.body?.accept === true));
   })
 );
 
