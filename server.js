@@ -9,6 +9,7 @@ import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
 import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
 import { checkEvent } from './src/check.js';
+import { streamAssistant, assistantMessages, clearAssistant, actOnProposal } from './src/assistant.js';
 import { webSearchProvider } from './src/evidence.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
@@ -313,6 +314,46 @@ app.delete('/api/events/:id/chat', (req, res) => {
   save();
   res.json({ ok: true });
 });
+
+// ---------- Assistant (general chat that can propose actions) ----------
+
+app.get('/api/assistant', (req, res) => res.json({ messages: assistantMessages() }));
+
+app.delete('/api/assistant', (req, res) => {
+  clearAssistant();
+  res.json({ ok: true });
+});
+
+app.post('/api/assistant', async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Empty message' });
+  if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use the assistant.' });
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  const ctrl = new AbortController();
+  res.on('close', () => ctrl.abort());
+  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  try {
+    await streamAssistant(message, {
+      onToken: (t) => send({ t }),
+      onStatus: (status) => send({ status }),
+      onSources: (sources) => send({ sources }),
+      onProposal: (proposal) => send({ proposal }),
+      signal: ctrl.signal,
+    });
+    send({ done: true });
+  } catch (e) {
+    if (!ctrl.signal.aborted) send({ error: e.message });
+  }
+  res.end();
+});
+
+// Runs only when the user clicks Confirm (or Cancel) on a proposal card.
+app.post(
+  '/api/assistant/act',
+  wrap(async (req, res) => {
+    res.json(await actOnProposal(Number(req.body?.index), req.body?.accept === true));
+  })
+);
 
 // Image proxy: fallback for outlets that block hot-linked images.
 app.get('/api/img', async (req, res) => {

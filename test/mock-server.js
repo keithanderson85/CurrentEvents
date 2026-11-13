@@ -131,6 +131,20 @@ function mockLLM(body) {
       missing: 'No outlet says how long it will take to restore power.',
     });
   }
+  if (/route requests for the assistant/.test(sys)) {
+    const q = (last.match(/MESSAGE: ([\s\S]*)/) || [])[1] || '';
+    const id = (last.match(/(evt_\w+): Storm Elena/) || [])[1] || '';
+    if (/deep dive/i.test(q)) return JSON.stringify({ action: 'deep_dive', event_id: id, focus: 'power outages', queries: [] });
+    if (/add (this|these)/i.test(q)) return JSON.stringify({ action: 'add_to_event', event_id: id, queries: [] });
+    if (/find out|follow/i.test(q)) return JSON.stringify({ action: 'create_event', title: 'War in Iran', description: 'Fighting involving Iran and the international response.', queries: ['Iran war'] });
+    if (/latest|look up/i.test(q)) return JSON.stringify({ action: 'search', queries: ['Iran war'], research: false });
+    return JSON.stringify({ action: 'none', queries: [] });
+  }
+  if (/assistant inside OpenFrame News/.test(sys)) {
+    if (/PROPOSED ACTION/.test(sys)) return `Here's what I found so far: strikes were reported near Isfahan and oil prices jumped.\n\nI can set this up as an event and keep tracking it. **Confirm below** and I'll get started.`;
+    if (/DROPPED LINKS/.test(sys)) return `I read the link you sent. It reports the storm's landfall and widespread outages. *(Mock reply.)*`;
+    return `Happy to help. A recount is a second tally of the ballots, usually triggered when the margin is very small.\n\n- **Automatic** recounts kick in below a set margin.\n- **Requested** recounts are asked for by a candidate.\n\n*(Mock reply, from general knowledge.)*`;
+  }
   if (/needs a web search/.test(sys)) {
     const q = (last.match(/QUESTION: (.*)/) || [])[1] || '';
     return JSON.stringify(/look up|latest|how many|study|history|iran/i.test(q) ? { search: true, queries: ['Iran war', 'hurricane rapid intensification'], research: true } : { search: false, queries: [] });

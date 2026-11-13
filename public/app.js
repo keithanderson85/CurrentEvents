@@ -186,7 +186,9 @@ function route() {
   const hash = location.hash || '#/';
   const m = hash.match(/^#\/event\/([\w-]+)/);
   window.scrollTo(0, 0);
+  document.body.classList.toggle('on-assistant', hash.startsWith('#/assistant'));
   if (m) renderEvent(m[1]);
+  else if (hash.startsWith('#/assistant')) renderAssistant();
   else renderHome();
 }
 window.addEventListener('hashchange', route);
@@ -1031,6 +1033,185 @@ async function sendChat(message) {
   } finally {
     state.chatBusy = false;
     if (!$('#clearChat')) paintChat();
+  }
+}
+
+// ---------- Assistant (general chat that can propose actions) ----------
+
+const ASSIST_SUGGESTIONS = ['What are the biggest stories today, in plain words?', 'Find out about a story and follow it for me: ', 'Which of today’s stories look shaky or disputed?', 'Explain how a recount works'];
+const assist = { messages: [], busy: false };
+
+function proposalHTML(pr, index) {
+  if (!pr) return '';
+  const what =
+    pr.type === 'create_event'
+      ? { h: 'Create a new event', b: `<b>${esc(pr.title)}</b>${pr.description ? `<span>${esc(pr.description)}</span>` : ''}${pr.urls?.length ? `<span>Starting from ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'} you sent. </span>` : ''}<span>I'll search for coverage and keep tracking it.</span>`, go: 'Create event' }
+      : pr.type === 'add_to_event'
+      ? { h: 'Add to an event', b: `<span>Add ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'} to</span><b>${esc(pr.eventTitle)}</b>`, go: 'Add links' }
+      : { h: 'Run a deep dive', b: `<b>${esc(pr.eventTitle)}</b>${pr.focus ? `<span>Focus: ${esc(pr.focus)}</span>` : ''}<span>Researches the story and checks claims against evidence. Takes a minute or two.</span>`, go: 'Start deep dive' };
+  const foot =
+    pr.status === 'pending'
+      ? `<div class="proposal-actions"><button class="btn accent sm" data-act-yes="${index}">${what.go}</button><button class="btn ghost sm" data-act-no="${index}">Not now</button></div>`
+      : pr.status === 'done'
+      ? `<div class="proposal-state ok">Done${pr.eventId ? ` · <a href="#/event/${pr.eventId}">Open the event</a>` : ''}</div>`
+      : `<div class="proposal-state">Skipped</div>`;
+  return `<div class="proposal ${pr.status}"><div class="proposal-kicker">${what.h}</div><div class="proposal-body">${what.b}</div>${foot}</div>`;
+}
+
+function assistLogHTML() {
+  if (!assist.messages.length)
+    return `<div class="assist-empty"><h2>What can I help with?</h2><p class="muted">Ask about anything, paste or drop links, or give me a task. I'll search the web when needed, and I always ask before I create or change anything.</p><div class="suggestions">${ASSIST_SUGGESTIONS.map(
+      (q) => `<button type="button" data-suggest>${esc(q)}</button>`
+    ).join('')}</div></div>`;
+  return assist.messages
+    .map((m, i) =>
+      m.role === 'user'
+        ? `<div class="msg user">${esc(m.content)}</div>`
+        : `<div class="msg assistant">${m.content ? `<div class="prose">${md(m.content)}</div>` : ''}${webSourcesHTML(m.sources)}${proposalHTML(m.proposal, i)}</div>`
+    )
+    .join('');
+}
+
+async function renderAssistant() {
+  document.title = 'Assistant · OpenFrame News';
+  if (!state.status) state.status = await api('/api/status').catch(() => null);
+  const llm = state.status?.llm;
+  app.innerHTML = `
+    <div class="assist">
+      <div class="assist-head">
+        <a class="back" href="#/">${icons.back || '‹'} All events</a>
+        <button class="btn sm ghost" id="assistClear" title="Start a new conversation">${icons.trash} Clear</button>
+      </div>
+      <div class="assist-log" id="assistLog"></div>
+      ${
+        llm
+          ? `<form class="chat-form assist-form" id="assistForm"><textarea class="input" name="m" rows="1" placeholder="${isNarrow() ? 'Ask anything or paste links…' : 'Ask anything, give me a task, or drop links here…'}"></textarea><button class="btn primary icon" type="submit" aria-label="Send">${icons.send}</button></form>`
+          : `<div class="chat-disabled">Add an OpenRouter API key to use the assistant.</div>`
+      }
+    </div>`;
+  const log = $('#assistLog');
+  try {
+    assist.messages = (await api('/api/assistant')).messages;
+  } catch {}
+  const paint = () => {
+    log.innerHTML = assistLogHTML();
+    log.scrollTop = log.scrollHeight;
+  };
+  paint();
+  const form = $('#assistForm');
+  const ta = form?.querySelector('textarea');
+  const grow = () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  };
+  ta?.addEventListener('input', grow);
+  ta?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const m = ta.value.trim();
+    if (!m || assist.busy) return;
+    ta.value = '';
+    grow();
+    sendAssist(m, paint);
+  });
+  // Drop links or text anywhere on the page to put them in the message box.
+  const page = $('.assist');
+  page.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    page.classList.add('dropping');
+  });
+  page.addEventListener('dragleave', () => page.classList.remove('dropping'));
+  page.addEventListener('drop', (e) => {
+    e.preventDefault();
+    page.classList.remove('dropping');
+    if (!ta) return;
+    const t = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (!t) return toast('I can take links and text. Files aren’t supported yet.');
+    ta.value = (ta.value ? ta.value.replace(/\s*$/, '\n') : '') + t.trim() + '\n';
+    grow();
+    ta.focus();
+  });
+  $('#assistClear').addEventListener('click', async () => {
+    if (assist.busy) return;
+    await api('/api/assistant', { method: 'DELETE' });
+    assist.messages = [];
+    paint();
+  });
+  log.addEventListener('click', async (e) => {
+    const sug = e.target.closest('[data-suggest]');
+    if (sug && ta) {
+      const q = sug.textContent;
+      if (q.endsWith(': ')) {
+        ta.value = q;
+        ta.focus();
+      } else sendAssist(q, paint);
+      return;
+    }
+    const b = e.target.closest('[data-act-yes],[data-act-no]');
+    if (!b) return;
+    const yes = b.hasAttribute('data-act-yes');
+    const index = Number(b.dataset.actYes ?? b.dataset.actNo);
+    b.closest('.proposal-actions').innerHTML = `<span class="muted">${yes ? 'Working on it…' : ''}</span>`;
+    try {
+      const r = await api('/api/assistant/act', { method: 'POST', body: { index, accept: yes } });
+      assist.messages[index].proposal = r.proposal;
+      if (r.message) assist.messages.push(r.message);
+    } catch (err) {
+      toast(err.message);
+    }
+    paint();
+  });
+  if (!isNarrow()) ta?.focus();
+}
+
+async function sendAssist(message, paint) {
+  assist.busy = true;
+  assist.messages.push({ role: 'user', content: message });
+  paint();
+  const log = $('#assistLog');
+  log.insertAdjacentHTML('beforeend', `<div class="msg assistant" id="assistStream"><div class="typing"><i></i><i></i><i></i></div></div>`);
+  log.scrollTop = log.scrollHeight;
+  const out = $('#assistStream');
+  let text = '';
+  const extra = {};
+  try {
+    const res = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed');
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const p of parts) {
+        if (!p.startsWith('data:')) continue;
+        const msg = JSON.parse(p.slice(5));
+        if (msg.error) throw new Error(msg.error);
+        if (msg.status && !text) out.innerHTML = `<div class="chat-status"><div class="typing"><i></i><i></i><i></i></div><span>${esc(msg.status)}</span></div>`;
+        if (msg.sources) extra.sources = msg.sources;
+        if (msg.proposal) extra.proposal = msg.proposal;
+        if (msg.t) {
+          text += msg.t;
+          if (!$('#assistStream')) continue; // navigated away
+          out.innerHTML = `<div class="prose">${md(text)}</div>`;
+          if (log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
+        }
+      }
+    }
+    assist.messages.push({ role: 'assistant', content: text, ...extra });
+  } catch (err) {
+    assist.messages.push({ role: 'assistant', content: `**Something went wrong:** ${err.message}` });
+  } finally {
+    assist.busy = false;
+    if ($('#assistLog')) paint();
   }
 }
 
