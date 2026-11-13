@@ -65,6 +65,7 @@ const icons = {
   ext: '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   dive: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg>',
+  clip: '<svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>',
   chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
   info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
@@ -1039,15 +1040,47 @@ async function sendChat(message) {
 // ---------- Assistant (general chat that can propose actions) ----------
 
 const ASSIST_SUGGESTIONS = ['What are the biggest stories today, in plain words?', 'Find out about a story and follow it for me: ', 'Which of today’s stories look shaky or disputed?', 'Explain how a recount works'];
-const assist = { messages: [], busy: false };
+const assist = { messages: [], busy: false, files: [] };
+const FILE_ACCEPT = '.pdf,.docx,.txt,.md,.json,.csv,.tsv,.log,.html,.xml,.yaml,.yml,.rtf';
+
+async function uploadAssistFiles(fileList, repaint) {
+  for (const f of [...fileList].slice(0, 6)) {
+    if (f.size > 25 * 1024 * 1024) {
+      toast(`${f.name} is larger than 25 MB.`);
+      continue;
+    }
+    const chip = { name: f.name, loading: true };
+    assist.files.push(chip);
+    repaint();
+    try {
+      const res = await fetch(`/api/assistant/files?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Could not read ${f.name}`);
+      Object.assign(chip, data, { loading: false });
+      if (data.truncated) toast(`${f.name} is very long, so only the first part is used.`);
+    } catch (err) {
+      assist.files.splice(assist.files.indexOf(chip), 1);
+      toast(err.message);
+    }
+    repaint();
+  }
+}
+const fileChips = (files, removable) =>
+  files?.length
+    ? `<div class="file-chips">${files
+        .map((f, i) => `<span class="file-chip ${f.loading ? 'loading' : ''}">${icons.note}<span>${esc(f.name)}</span>${removable && !f.loading ? `<button type="button" data-rm-file="${i}" aria-label="Remove ${esc(f.name)}">×</button>` : ''}</span>`)
+        .join('')}</div>`
+    : '';
 
 function proposalHTML(pr, index) {
   if (!pr) return '';
+  const n = (c, w) => (c ? `${c} ${w}${c === 1 ? '' : 's'}` : '');
+  const sent = [n(pr.urls?.length, 'link'), n(pr.files?.length, 'file')].filter(Boolean).join(' and ');
   const what =
     pr.type === 'create_event'
-      ? { h: 'Create a new event', b: `<b>${esc(pr.title)}</b>${pr.description ? `<span>${esc(pr.description)}</span>` : ''}${pr.urls?.length ? `<span>Starting from ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'} you sent. </span>` : ''}<span>I'll search for coverage and keep tracking it.</span>`, go: 'Create event' }
+      ? { h: 'Create a new event', b: `<b>${esc(pr.title)}</b>${pr.description ? `<span>${esc(pr.description)}</span>` : ''}${sent ? `<span>Includes the ${sent} you sent.</span>` : ''}<span>I'll search for coverage and keep tracking it.</span>`, go: 'Create event' }
       : pr.type === 'add_to_event'
-      ? { h: 'Add to an event', b: `<span>Add ${pr.urls.length} link${pr.urls.length === 1 ? '' : 's'} to</span><b>${esc(pr.eventTitle)}</b>`, go: 'Add links' }
+      ? { h: 'Add to an event', b: `<span>Add ${sent} to</span><b>${esc(pr.eventTitle)}</b>${pr.files?.length ? '<span>Files are saved as notes on the event.</span>' : ''}`, go: 'Add to event' }
       : { h: 'Run a deep dive', b: `<b>${esc(pr.eventTitle)}</b>${pr.focus ? `<span>Focus: ${esc(pr.focus)}</span>` : ''}<span>Researches the story and checks claims against evidence. Takes a minute or two.</span>`, go: 'Start deep dive' };
   const foot =
     pr.status === 'pending'
@@ -1060,13 +1093,13 @@ function proposalHTML(pr, index) {
 
 function assistLogHTML() {
   if (!assist.messages.length)
-    return `<div class="assist-empty"><h2>What can I help with?</h2><p class="muted">Ask about anything, paste or drop links, or give me a task. I'll search the web when needed, and I always ask before I create or change anything.</p><div class="suggestions">${ASSIST_SUGGESTIONS.map(
+    return `<div class="assist-empty"><h2>What can I help with?</h2><p class="muted">Ask about anything, drop in links or files (PDF, Word, text, JSON), or give me a task. I'll search the web when needed, and I always ask before I create or change anything.</p><div class="suggestions">${ASSIST_SUGGESTIONS.map(
       (q) => `<button type="button" data-suggest>${esc(q)}</button>`
     ).join('')}</div></div>`;
   return assist.messages
     .map((m, i) =>
       m.role === 'user'
-        ? `<div class="msg user">${esc(m.content)}</div>`
+        ? `<div class="msg user">${fileChips(m.files)}${esc(m.content)}</div>`
         : `<div class="msg assistant">${m.content ? `<div class="prose">${md(m.content)}</div>` : ''}${webSourcesHTML(m.sources)}${proposalHTML(m.proposal, i)}</div>`
     )
     .join('');
@@ -1085,7 +1118,7 @@ async function renderAssistant() {
       <div class="assist-log" id="assistLog"></div>
       ${
         llm
-          ? `<form class="chat-form assist-form" id="assistForm"><textarea class="input" name="m" rows="1" placeholder="${isNarrow() ? 'Ask anything or paste links…' : 'Ask anything, give me a task, or drop links here…'}"></textarea><button class="btn primary icon" type="submit" aria-label="Send">${icons.send}</button></form>`
+          ? `<form class="chat-form assist-form" id="assistForm"><div class="assist-attach" id="assistAttach"></div><button class="btn icon ghost" type="button" id="assistFileBtn" title="Attach a file (PDF, Word, text, JSON)" aria-label="Attach a file">${icons.clip}</button><input type="file" id="assistFile" hidden multiple accept="${FILE_ACCEPT}" /><textarea class="input" name="m" rows="1" placeholder="${isNarrow() ? 'Ask anything or paste links…' : 'Ask anything, give me a task, or drop links and files here…'}"></textarea><button class="btn primary icon" type="submit" aria-label="Send">${icons.send}</button></form>`
           : `<div class="chat-disabled">Add an OpenRouter API key to use the assistant.</div>`
       }
     </div>`;
@@ -1100,6 +1133,28 @@ async function renderAssistant() {
   paint();
   const form = $('#assistForm');
   const ta = form?.querySelector('textarea');
+  const paintFiles = () => {
+    const box = $('#assistAttach');
+    if (box) box.innerHTML = fileChips(assist.files, true);
+  };
+  paintFiles();
+  $('#assistFileBtn')?.addEventListener('click', () => $('#assistFile').click());
+  $('#assistFile')?.addEventListener('change', (e) => {
+    uploadAssistFiles(e.target.files, paintFiles);
+    e.target.value = '';
+  });
+  $('#assistAttach')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rm-file]');
+    if (!b) return;
+    assist.files.splice(Number(b.dataset.rmFile), 1);
+    paintFiles();
+  });
+  ta?.addEventListener('paste', (e) => {
+    if (e.clipboardData?.files?.length) {
+      e.preventDefault();
+      uploadAssistFiles(e.clipboardData.files, paintFiles);
+    }
+  });
   const grow = () => {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
@@ -1114,10 +1169,14 @@ async function renderAssistant() {
   form?.addEventListener('submit', (e) => {
     e.preventDefault();
     const m = ta.value.trim();
-    if (!m || assist.busy) return;
+    if (assist.files.some((f) => f.loading)) return toast('Still reading the file…');
+    const files = assist.files.filter((f) => f.id);
+    if ((!m && !files.length) || assist.busy) return;
     ta.value = '';
+    assist.files = [];
+    paintFiles();
     grow();
-    sendAssist(m, paint);
+    sendAssist(m, paint, files);
   });
   // Drop links or text anywhere on the page to put them in the message box.
   const page = $('.assist');
@@ -1130,8 +1189,9 @@ async function renderAssistant() {
     e.preventDefault();
     page.classList.remove('dropping');
     if (!ta) return;
+    if (e.dataTransfer.files?.length) return uploadAssistFiles(e.dataTransfer.files, paintFiles);
     const t = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-    if (!t) return toast('I can take links and text. Files aren’t supported yet.');
+    if (!t) return;
     ta.value = (ta.value ? ta.value.replace(/\s*$/, '\n') : '') + t.trim() + '\n';
     grow();
     ta.focus();
@@ -1169,9 +1229,10 @@ async function renderAssistant() {
   if (!isNarrow()) ta?.focus();
 }
 
-async function sendAssist(message, paint) {
+async function sendAssist(message, paint, files = []) {
   assist.busy = true;
-  assist.messages.push({ role: 'user', content: message });
+  if (!message && files.length) message = 'Please read the attached file and tell me what it says.';
+  assist.messages.push({ role: 'user', content: message, ...(files.length ? { files: files.map((f) => ({ id: f.id, name: f.name })) } : {}) });
   paint();
   const log = $('#assistLog');
   log.insertAdjacentHTML('beforeend', `<div class="msg assistant" id="assistStream"><div class="typing"><i></i><i></i><i></i></div></div>`);
@@ -1180,7 +1241,7 @@ async function sendAssist(message, paint) {
   let text = '';
   const extra = {};
   try {
-    const res = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+    const res = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, fileIds: files.map((f) => f.id) }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed');
     const reader = res.body.getReader();
     const dec = new TextDecoder();

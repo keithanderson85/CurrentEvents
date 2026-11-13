@@ -141,7 +141,8 @@ function mockLLM(body) {
     return JSON.stringify({ action: 'none', queries: [] });
   }
   if (/assistant inside OpenFrame News/.test(sys)) {
-    if (/PROPOSED ACTION/.test(sys)) return `Here's what I found so far: strikes were reported near Isfahan and oil prices jumped.\n\nI can set this up as an event and keep tracking it. **Confirm below** and I'll get started.`;
+    if (/PROPOSED ACTION \(awaiting/.test(sys)) return `Here's what I found so far: strikes were reported near Isfahan and oil prices jumped.\n\nI can set this up as an event and keep tracking it. **Confirm below** and I'll get started.`;
+    if (/\nATTACHED FILES:/.test(sys)) return `I read **${(sys.match(/FILE: ([^\n(—]+)/) || [])[1]?.trim()}**. It says the memory card held 388 ballots from the Donalsonville precinct. *(Mock reply.)*`;
     if (/DROPPED LINKS/.test(sys)) return `I read the link you sent. It reports the storm's landfall and widespread outages. *(Mock reply.)*`;
     return `Happy to help. A recount is a second tally of the ballots, usually triggered when the margin is very small.\n\n- **Automatic** recounts kick in below a set margin.\n- **Requested** recounts are asked for by a candidate.\n\n*(Mock reply, from general knowledge.)*`;
   }

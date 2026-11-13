@@ -675,3 +675,15 @@ body.on-assistant #assistantBtn { background: var(--accent-soft); border-color: 
 .assist-head .back { margin-bottom: 0; }
 a.btn { text-decoration: none; }
 .assist-form textarea, .assist-form textarea:focus { border: 0 !important; box-shadow: none !important; outline: none !important; background: transparent; }
+
+/* ---------- Assistant: file attachments ---------- */
+.assist-form { flex-wrap: wrap; }
+.assist-attach { flex-basis: 100%; }
+.assist-attach:empty { display: none; }
+.file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--ink); font-size: 12.5px; }
+.file-chip svg { width: 13px; height: 13px; flex: none; }
+.file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.file-chip.loading { opacity: 0.55; animation: blink 1.2s infinite; }
+.file-chip button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 0 0 2px; }
+.msg.user .file-chip { background: color-mix(in srgb, var(--bg) 16%, transparent); border-color: color-mix(in srgb, var(--bg) 30%, transparent); color: inherit; }

@@ -9,7 +9,8 @@ import { runDeepDive } from './src/research.js';
 import { streamChat } from './src/chat.js';
 import { createManualEvent, addArticleToEvent, summarize, startFindCoverage } from './src/manual.js';
 import { checkEvent } from './src/check.js';
-import { streamAssistant, assistantMessages, clearAssistant, actOnProposal } from './src/assistant.js';
+import { streamAssistant, assistantMessages, clearAssistant, actOnProposal, addAssistantFile } from './src/assistant.js';
+import { MAX_FILE_BYTES } from './src/files.js';
 import { webSearchProvider } from './src/evidence.js';
 import { fetchArticle, truncate } from './src/fetcher.js';
 import { checkModel, currentModel } from './src/llm.js';
@@ -325,7 +326,7 @@ app.delete('/api/assistant', (req, res) => {
 });
 
 app.post('/api/assistant', async (req, res) => {
-  const message = String(req.body?.message || '').trim();
+  const message = String(req.body?.message || '').trim() || (req.body?.fileIds?.length ? 'Please read the attached file and tell me what it says.' : '');
   if (!message) return res.status(400).json({ error: 'Empty message' });
   if (!hasLLM()) return res.status(400).json({ error: 'Add an OpenRouter API key to use the assistant.' });
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -334,6 +335,7 @@ app.post('/api/assistant', async (req, res) => {
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   try {
     await streamAssistant(message, {
+      fileIds: Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String).slice(0, 6) : [],
       onToken: (t) => send({ t }),
       onStatus: (status) => send({ status }),
       onSources: (sources) => send({ sources }),
@@ -346,6 +348,21 @@ app.post('/api/assistant', async (req, res) => {
   }
   res.end();
 });
+
+// Attach a file: the raw bytes are the request body, the name is in the query string.
+app.post(
+  '/api/assistant/files',
+  express.raw({ type: () => true, limit: MAX_FILE_BYTES }),
+  wrap(async (req, res) => {
+    const name = String(req.query.name || 'file').slice(0, 200);
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'The file is empty.' });
+    try {
+      res.json(await addAssistantFile(name, req.body));
+    } catch (e) {
+      res.status(400).json({ error: `${name}: ${e.message}` });
+    }
+  })
+);
 
 // Runs only when the user clicks Confirm (or Cancel) on a proposal card.
 app.post(
